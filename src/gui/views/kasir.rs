@@ -39,6 +39,7 @@ pub struct KasirView {
     pub btn_pending: Button,
     pub btn_buka_pending: Button,
     pub lbl_network_status: Frame,
+    pub lbl_operator: Frame,
     pub lbl_warning_rugi: Frame,
     pub cart_items: Vec<CartItem>,
     pub rows_data: Rc<RefCell<Vec<MockCartRow>>>,
@@ -46,9 +47,9 @@ pub struct KasirView {
 
 impl KasirView {
     pub fn new() -> Self {
-        let mut win = Window::default()
-            .with_size(1024, 680)
-            .with_label("Kasir Penjualan POS - [F1 Cari | F2 Bayar | F3 Simpan | F4 Cetak | F5 Baru]");
+        let mut win = Window::default().with_size(1024, 680).with_label(
+            "Kasir Penjualan POS - [F1 Cari | F2 Bayar | F3 Simpan | F4 Cetak | F5 Baru]",
+        );
         win.set_color(AppTheme::BG_APP);
 
         // ==========================================
@@ -58,13 +59,13 @@ impl KasirView {
         top_card.set_frame(FrameType::RFlatBox);
         top_card.set_color(Color::White);
 
-        let mut lbl_store = Frame::new(26, 17, 300, 32, "APOTEK NAMIRA");
+        let mut lbl_store = Frame::new(26, 17, 300, 32, "Kasir penjualan");
         lbl_store.set_label_size(16);
         lbl_store.set_label_font(Font::HelveticaBold);
         lbl_store.set_label_color(AppTheme::PRIMARY);
         lbl_store.set_align(Align::Left | Align::Inside);
 
-        let mut lbl_operator = Frame::new(340, 18, 300, 30, "Kasir: Operator 01 | Shift: Pagi");
+        let mut lbl_operator = Frame::new(340, 18, 300, 30, "Pilih obat, satuan, dan jumlah");
         lbl_operator.set_label_size(12);
         lbl_operator.set_label_color(AppTheme::TEXT_MUTED);
         lbl_operator.set_align(Align::Left | Align::Inside);
@@ -95,11 +96,13 @@ impl KasirView {
         input_barcode.set_color(Color::from_hex(0xF8FAFC));
 
         let mut lbl_qty = Frame::new(388, 74, 35, 30, "Qty:");
+        lbl_qty.hide();
         lbl_qty.set_label_font(Font::HelveticaBold);
         lbl_qty.set_label_color(AppTheme::TEXT_TITLE);
 
         let mut input_qty = Input::new(425, 73, 50, 32, "");
         input_qty.set_value("2");
+        input_qty.hide();
         input_qty.set_text_size(14);
         input_qty.set_frame(FrameType::RFlatBox);
         input_qty.set_color(Color::from_hex(0xF8FAFC));
@@ -107,10 +110,12 @@ impl KasirView {
         let mut choice_unit = Choice::new(485, 73, 90, 32, "");
         choice_unit.add_choice("Strip|Tablet|Box");
         choice_unit.set_value(0);
+        choice_unit.hide();
         choice_unit.set_frame(FrameType::RFlatBox);
         choice_unit.set_color(Color::from_hex(0xF8FAFC));
 
-        let mut btn_add_item = Button::new(585, 73, 105, 32, "+ Tambah");
+        input_barcode.resize(118, 73, 440, 32);
+        let mut btn_add_item = Button::new(585, 73, 260, 32, "Cari / tambah obat");
         btn_add_item.set_color(AppTheme::PRIMARY);
         btn_add_item.set_label_color(Color::White);
         btn_add_item.set_label_font(Font::HelveticaBold);
@@ -125,16 +130,19 @@ impl KasirView {
         // 3. TABEL KERANJANG BELANJA (1000 x 360)
         // ==========================================
         let mut cart_table = Table::new(12, 122, 1000, 355, "");
+        cart_table.end();
+        cart_table.set_row_height_all(34);
+        cart_table.set_col_header_height(32);
         cart_table.set_color(Color::White);
         cart_table.set_cols(7);
         cart_table.set_col_header(true);
-        cart_table.set_col_width(0, 50);   // No
-        cart_table.set_col_width(1, 140);  // Barcode
-        cart_table.set_col_width(2, 360);  // Nama Obat
-        cart_table.set_col_width(3, 90);   // Satuan
-        cart_table.set_col_width(4, 70);   // Qty
-        cart_table.set_col_width(5, 120);  // Harga Satuan
-        cart_table.set_col_width(6, 150);  // Subtotal
+        cart_table.set_col_width(0, 50); // No
+        cart_table.set_col_width(1, 140); // Barcode
+        cart_table.set_col_width(2, 300); // Nama Obat
+        cart_table.set_col_width(3, 90); // Satuan
+        cart_table.set_col_width(4, 70); // Qty
+        cart_table.set_col_width(5, 120); // Harga Satuan
+        cart_table.set_col_width(6, 150); // Subtotal
 
         let rows_data = Rc::new(RefCell::new(vec![
             MockCartRow {
@@ -198,7 +206,11 @@ impl KasirView {
                 let items = r_clone.borrow();
                 if let Some(item) = items.get(row as usize) {
                     draw::push_clip(x, y, w, h);
-                    let bg = if row % 2 == 0 { Color::White } else { Color::from_hex(0xF8FAFC) };
+                    let bg = if row % 2 == 0 {
+                        Color::White
+                    } else {
+                        Color::from_hex(0xF8FAFC)
+                    };
                     draw::draw_box(FrameType::FlatBox, x, y, w, h, bg);
                     draw::set_draw_color(Color::from_hex(0xF1F5F9));
                     draw::draw_line(x, y + h - 1, x + w, y + h - 1);
@@ -321,6 +333,7 @@ impl KasirView {
             btn_pending,
             btn_buka_pending,
             lbl_network_status,
+            lbl_operator,
             lbl_warning_rugi,
             cart_items: Vec::new(),
             rows_data,

@@ -1,263 +1,279 @@
-use crate::gui::theme::AppTheme;
-use crate::gui::views::kasir::KasirView;
-use crate::gui::views::master_crud::MasterSimpleView;
-use crate::gui::views::master_obat::MasterObatView;
-use crate::gui::views::stok_opname::StokOpnameView;
-use fltk::button::Button;
-use fltk::enums::{Align, Color, Font, FrameType};
-use fltk::frame::Frame;
-use fltk::group::Group;
-use fltk::prelude::*;
-use fltk::window::Window;
+use super::{
+    components::*, dashboard::DashboardView, kasir::KasirView, master_crud::MasterSimpleView,
+    master_obat::MasterObatView, pembelian::PembelianView, reports::ReportsView,
+    settings::SettingsView, stok_opname::StokOpnameView, transactions,
+};
+use crate::{db::operations::ReportKind as R, gui::theme::AppTheme as T, models::User};
+use fltk::{
+    button::Button,
+    enums::{Color, Event, FrameType, Key},
+    group::Group,
+    prelude::*,
+    window::Window,
+};
+use mysql::Pool;
+use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
 pub struct AppShell {
     pub win: Window,
-    pub btn_nav_transaksi: Button,
-    pub btn_nav_master: Button,
-    pub btn_nav_laporan: Button,
-    pub btn_nav_pengaturan: Button,
+}
+
+fn page(name: &str, pool: Option<Pool>, user: User) -> Window {
+    match name {
+        "Ringkasan" => DashboardView::new(pool).win,
+        "Penjualan" => {
+            ReportsView::new(
+                pool,
+                user,
+                vec![R::Sales, R::Receivables, R::Payments, R::Returns],
+            )
+            .win
+        }
+        "Pembelian" => {
+            let mut view = PembelianView::new(pool.clone());
+            transactions::bind_purchase(&mut view, pool, user);
+            view.win
+        }
+        "Daftar pembelian" => {
+            ReportsView::new(
+                pool,
+                user,
+                vec![R::Purchases, R::Debts, R::Payments, R::Returns],
+            )
+            .win
+        }
+        "Hutang / piutang" => {
+            ReportsView::new(pool, user, vec![R::Debts, R::Receivables, R::Payments]).win
+        }
+        "Obat" => MasterObatView::new(pool).win,
+        "Suplier" => MasterSimpleView::suplier(pool).win,
+        "Pelanggan" => MasterSimpleView::pelanggan(pool).win,
+        "Dokter" => MasterSimpleView::dokter(pool).win,
+        "Operator" => MasterSimpleView::karyawan(pool).win,
+        "Stok opname" => StokOpnameView::new(pool).win,
+        "Kartu stok" => ReportsView::new(pool, user, vec![R::StockCards, R::Stock]).win,
+        "Laporan" => {
+            ReportsView::new(
+                pool,
+                user,
+                vec![
+                    R::Daily,
+                    R::Sales,
+                    R::Purchases,
+                    R::TopProducts,
+                    R::TopCustomers,
+                    R::Stock,
+                    R::StockCards,
+                    R::Payments,
+                    R::Returns,
+                ],
+            )
+            .win
+        }
+        _ => SettingsView::new(pool, user).win,
+    }
 }
 
 impl AppShell {
-    pub fn new(pool: Option<mysql::Pool>) -> Self {
+    pub fn new(pool: Option<Pool>) -> Self {
+        Self::for_user(
+            pool,
+            User {
+                id: 0,
+                username: "preview".into(),
+                full_name: "Pratinjau".into(),
+                role: "ADMIN".into(),
+            },
+        )
+    }
+    pub fn for_user(pool: Option<Pool>, user: User) -> Self {
         let mut win = Window::default()
             .with_size(1200, 720)
-            .with_label("Apotek Solution - Sistem POS & Inventori Modern");
-        win.set_color(AppTheme::BG_APP);
-
-        // ========================================================
-        // 1. TOP GLOBAL NAVIGATION BAR (Dark Slate 900, Height 50)
-        // ========================================================
-        let mut top_nav = Group::new(0, 0, 1200, 50, "");
-        top_nav.set_color(AppTheme::HEADER_BG);
-        top_nav.set_frame(FrameType::FlatBox);
-
-        // Logo Apotek Modern
-        let mut logo_icon = Frame::new(16, 10, 30, 30, "✚");
-        logo_icon.set_label_size(20);
-        logo_icon.set_label_color(AppTheme::SUCCESS);
-        logo_icon.set_label_font(Font::HelveticaBold);
-
-        let mut logo_text = Frame::new(48, 10, 140, 30, "APOTEK POS");
-        logo_text.set_label_size(16);
-        logo_text.set_label_font(Font::HelveticaBold);
-        logo_text.set_label_color(Color::White);
-        logo_text.set_align(Align::Left | Align::Inside);
-
-        let create_nav_btn = |x: i32, label: &'static str, is_active: bool| -> Button {
-            let mut btn = Button::new(x, 9, 130, 32, label);
-            btn.set_label_font(Font::HelveticaBold);
-            btn.set_label_size(12);
-            btn.set_frame(FrameType::RFlatBox);
-            if is_active {
-                btn.set_color(AppTheme::HEADER_ACTIVE);
-                btn.set_label_color(Color::White);
-            } else {
-                btn.set_color(AppTheme::HEADER_BG);
-                btn.set_label_color(Color::from_hex(0x94A3B8));
-            }
-            btn
-        };
-
-        let btn_transaksi = create_nav_btn(200, "TRANSAKSI", false);
-        let btn_master = create_nav_btn(335, "MASTER DATA", true);
-        let btn_laporan = create_nav_btn(470, "LAPORAN", false);
-        let btn_pengaturan = create_nav_btn(605, "PENGATURAN", false);
-
-        // Indikator Status & Operator di kanan
-        let status_text = if pool.is_some() { "● Terhubung DB (Server)" } else { "● Mode Offline (Preview)" };
-        let status_color = if pool.is_some() { AppTheme::SUCCESS } else { AppTheme::WARNING };
-        let mut lbl_status = Frame::new(820, 10, 180, 30, "");
-        lbl_status.set_label(status_text);
-        lbl_status.set_label_color(status_color);
-        lbl_status.set_label_font(Font::HelveticaBold);
-        lbl_status.set_label_size(12);
-        lbl_status.set_align(Align::Right | Align::Inside);
-
-        let mut lbl_user = Frame::new(1010, 10, 170, 30, "Admin (Gudang)");
-        lbl_user.set_label_color(Color::from_hex(0xCBD5E1));
-        lbl_user.set_label_size(12);
-        lbl_user.set_align(Align::Right | Align::Inside);
-
-        top_nav.end();
-
-        // ========================================================
-        // 2. SUB-RIBBON ACTION BAR (White Card, Height 58)
-        // ========================================================
-        let mut ribbon = Group::new(0, 50, 1200, 58, "");
-        ribbon.set_color(AppTheme::CARD_BG);
+            .with_label("Apotek POS");
+        win.set_color(T::BG_APP);
+        let mut header = Group::new(0, 0, 1200, 50, None);
+        header.set_frame(FrameType::FlatBox);
+        header.set_color(Color::White);
+        let mut brand = text(24, 10, 140, 30, "+ APOTEK POS", 16, true);
+        brand.set_label_color(T::PRIMARY);
+        let mut nav = Vec::new();
+        for (i, label) in [
+            "Ringkasan",
+            "Transaksi",
+            "Master data",
+            "Laporan",
+            "Pengaturan",
+        ]
+        .iter()
+        .enumerate()
+        {
+            nav.push(button(182 + i as i32 * 124, 8, 116, label, false));
+        }
+        text(806, 10, 176, 30, &user.full_name, 12, false);
+        let mut cashier = button(998, 8, 178, "Buka kasir [F1]", true);
+        header.end();
+        let mut ribbon = Group::new(0, 50, 1200, 58, None);
         ribbon.set_frame(FrameType::FlatBox);
-
-        let mut div_line = Frame::new(0, 107, 1200, 1, "");
-        div_line.set_color(AppTheme::BORDER);
-        div_line.set_frame(FrameType::FlatBox);
-
-        let create_pill = |x: i32, w: i32, label: &'static str, is_active: bool| -> Button {
-            let mut b = Button::new(x, 62, w, 34, label);
-            b.set_label_font(Font::HelveticaBold);
-            b.set_label_size(12);
-            b.set_frame(FrameType::RFlatBox);
-            if is_active {
-                b.set_color(AppTheme::PRIMARY);
-                b.set_label_color(Color::White);
-            } else {
-                b.set_color(Color::from_hex(0xF1F5F9));
-                b.set_label_color(AppTheme::TEXT_BODY);
-            }
-            b
-        };
-
-        let mut pill_obat = create_pill(20, 95, "💊 Obat", true);
-        let mut pill_suplier = create_pill(122, 100, "🏢 Suplier", false);
-        let mut pill_pelanggan = create_pill(228, 95, "👥 Pasien", false);
-        let mut pill_dokter = create_pill(329, 95, "🩺 Dokter", false);
-        let mut pill_karyawan = create_pill(430, 110, "👤 Karyawan", false);
-        let mut pill_opname = create_pill(546, 130, "⚖ Stok Opname", false);
-
-        // Tombol Quick Action Kasir POS di Kanan
-        let mut btn_buka_kasir = Button::new(980, 60, 200, 38, "+ Buka Kasir POS (F1)");
-        btn_buka_kasir.set_color(AppTheme::PRIMARY);
-        btn_buka_kasir.set_label_color(Color::White);
-        btn_buka_kasir.set_label_font(Font::HelveticaBold);
-        btn_buka_kasir.set_label_size(13);
-        btn_buka_kasir.set_frame(FrameType::RFlatBox);
-
-        btn_buka_kasir.set_callback(|_| {
-            let mut kasir = KasirView::new();
-            kasir.win.show();
-        });
-
+        ribbon.set_color(T::BG_APP);
+        let mut pills = Vec::<Button>::new();
+        for i in 0..8 {
+            pills.push(button(24 + i * 144, 62, 136, "", false));
+        }
         ribbon.end();
-
-        // ========================================================
-        // 3. MAIN CONTENT: SUITE VIEW MASTER DATA
-        // ========================================================
-        let view_obat = MasterObatView::new(pool.clone());
-        let view_suplier = MasterSimpleView::suplier(pool.clone());
-        let view_pelanggan = MasterSimpleView::pelanggan(pool.clone());
-        let view_dokter = MasterSimpleView::dokter(pool.clone());
-        let view_karyawan = MasterSimpleView::karyawan(pool.clone());
-        let view_opname = StokOpnameView::new(pool.clone());
-
-        let mut w_obat = view_obat.win.clone();
-        let mut w_suplier = view_suplier.win.clone();
-        let mut w_pelanggan = view_pelanggan.win.clone();
-        let mut w_dokter = view_dokter.win.clone();
-        let mut w_karyawan = view_karyawan.win.clone();
-        let mut w_opname = view_opname.win.clone();
-
-        // Default tampilkan Master Obat
-        w_obat.show();
-
+        let mut line = fltk::frame::Frame::new(0, 107, 1200, 1, None);
+        line.set_frame(FrameType::FlatBox);
+        line.set_color(T::BORDER);
         win.end();
-
-        // Handler Pergantian Tab Ribbon (DRY Switching)
-        let reset_pills = {
-            let mut p1 = pill_obat.clone();
-            let mut p2 = pill_suplier.clone();
-            let mut p3 = pill_pelanggan.clone();
-            let mut p4 = pill_dokter.clone();
-            let mut p5 = pill_karyawan.clone();
-            let mut p6 = pill_opname.clone();
-            move |active_idx: usize| {
-                let pills = [&mut p1, &mut p2, &mut p3, &mut p4, &mut p5, &mut p6];
-                for (i, p) in pills.into_iter().enumerate() {
-                    if i == active_idx {
-                        p.set_color(AppTheme::PRIMARY);
-                        p.set_label_color(Color::White);
-                    } else {
-                        p.set_color(Color::from_hex(0xF1F5F9));
-                        p.set_label_color(AppTheme::TEXT_BODY);
-                    }
-                    p.redraw();
+        let categories: Vec<Vec<&'static str>> = vec![
+            vec!["Ringkasan"],
+            vec![
+                "Penjualan",
+                "Pembelian",
+                "Daftar pembelian",
+                "Hutang / piutang",
+            ],
+            vec![
+                "Obat",
+                "Suplier",
+                "Pelanggan",
+                "Dokter",
+                "Operator",
+                "Stok opname",
+                "Kartu stok",
+            ],
+            vec!["Laporan"],
+            vec!["Pengaturan"],
+        ];
+        let cache = Rc::new(RefCell::new(BTreeMap::<String, Window>::new()));
+        let select = {
+            let cache = cache.clone();
+            let pool = pool.clone();
+            let user = user.clone();
+            let mut parent = win.clone();
+            move |name: &str| {
+                for w in cache.borrow_mut().values_mut() {
+                    w.hide();
+                }
+                if !cache.borrow().contains_key(name) {
+                    parent.begin();
+                    let w = page(name, pool.clone(), user.clone());
+                    parent.end();
+                    cache.borrow_mut().insert(name.into(), w);
+                }
+                if let Some(w) = cache.borrow_mut().get_mut(name) {
+                    w.show();
                 }
             }
         };
-
-        // Helper untuk hide all windows
-        let hide_all = {
-            let mut wo = w_obat.clone();
-            let mut ws = w_suplier.clone();
-            let mut wp = w_pelanggan.clone();
-            let mut wd = w_dokter.clone();
-            let mut wk = w_karyawan.clone();
-            let mut wn = w_opname.clone();
-            move || {
-                wo.hide();
-                ws.hide();
-                wp.hide();
-                wd.hide();
-                wk.hide();
-                wn.hide();
+        let change_category = {
+            let categories = categories.clone();
+            let mut pills = pills.clone();
+            let mut nav = nav.clone();
+            let select = select.clone();
+            let user = user.clone();
+            move |index: usize| {
+                for (i, b) in nav.iter_mut().enumerate() {
+                    b.set_color(if i == index { T::PRIMARY } else { T::BG_APP });
+                    b.set_label_color(if i == index {
+                        Color::White
+                    } else {
+                        T::TEXT_BODY
+                    });
+                    b.redraw();
+                }
+                let all_pills = pills.clone();
+                for (i, b) in pills.iter_mut().enumerate() {
+                    if let Some(name) = categories[index].get(i) {
+                        b.set_label(name);
+                        b.set_color(if i == 0 { T::PRIMARY } else { T::TABLE_HEADER });
+                        b.set_label_color(if i == 0 { Color::White } else { T::TEXT_BODY });
+                        b.show();
+                        let forbidden = (!user.is_admin()
+                            && matches!(*name, "Operator" | "Pengaturan"))
+                            || (!user.can_access_reports()
+                                && matches!(
+                                    *name,
+                                    "Pembelian"
+                                        | "Daftar pembelian"
+                                        | "Hutang / piutang"
+                                        | "Stok opname"
+                                        | "Kartu stok"
+                                        | "Laporan"
+                                ));
+                        if forbidden {
+                            b.deactivate();
+                        } else {
+                            b.activate();
+                        }
+                        let select = select.clone();
+                        let mut siblings = all_pills.clone();
+                        let name = *name;
+                        b.set_callback(move |_| {
+                            for (j, b) in siblings.iter_mut().enumerate() {
+                                b.set_color(if i == j { T::PRIMARY } else { T::TABLE_HEADER });
+                                b.set_label_color(if i == j { Color::White } else { T::TEXT_BODY });
+                                b.redraw();
+                            }
+                            select(name);
+                        });
+                    } else {
+                        b.hide();
+                    }
+                }
+                let first = categories[index].iter().find(|name| {
+                    !(!user.is_admin() && matches!(**name, "Operator" | "Pengaturan"))
+                        && !(!user.can_access_reports()
+                            && matches!(
+                                **name,
+                                "Pembelian"
+                                    | "Daftar pembelian"
+                                    | "Hutang / piutang"
+                                    | "Stok opname"
+                                    | "Kartu stok"
+                                    | "Laporan"
+                            ))
+                });
+                if let Some(name) = first {
+                    select(name);
+                }
             }
         };
-
-        let mut r_pills_1 = reset_pills.clone();
-        let mut h1 = hide_all.clone();
-        let mut show_obat = w_obat.clone();
-        pill_obat.set_callback(move |_| {
-            h1();
-            show_obat.show();
-            r_pills_1(0);
-        });
-
-        let mut r_pills_2 = reset_pills.clone();
-        let mut h2 = hide_all.clone();
-        let mut show_suplier = w_suplier.clone();
-        pill_suplier.set_callback(move |_| {
-            h2();
-            show_suplier.show();
-            r_pills_2(1);
-        });
-
-        let mut r_pills_3 = reset_pills.clone();
-        let mut h3 = hide_all.clone();
-        let mut show_pelanggan = w_pelanggan.clone();
-        pill_pelanggan.set_callback(move |_| {
-            h3();
-            show_pelanggan.show();
-            r_pills_3(2);
-        });
-
-        let mut r_pills_4 = reset_pills.clone();
-        let mut h4 = hide_all.clone();
-        let mut show_dokter = w_dokter.clone();
-        pill_dokter.set_callback(move |_| {
-            h4();
-            show_dokter.show();
-            r_pills_4(3);
-        });
-
-        let mut r_pills_5 = reset_pills.clone();
-        let mut h5 = hide_all.clone();
-        let mut show_karyawan = w_karyawan.clone();
-        pill_karyawan.set_callback(move |_| {
-            h5();
-            show_karyawan.show();
-            r_pills_5(4);
-        });
-
-        let mut r_pills_6 = reset_pills;
-        let mut h6 = hide_all;
-        let mut show_opname = w_opname.clone();
-        pill_opname.set_callback(move |_| {
-            h6();
-            show_opname.show();
-            r_pills_6(5);
-        });
-
-        btn_buka_kasir.set_callback(|_| {
-            let mut kasir = KasirView::new();
-            kasir.win.make_modal(true);
-            kasir.win.show();
-        });
-
-        Self {
-            win,
-            btn_nav_transaksi: btn_transaksi,
-            btn_nav_master: btn_master,
-            btn_nav_laporan: btn_laporan,
-            btn_nav_pengaturan: btn_pengaturan,
+        for (i, b) in nav.iter_mut().enumerate() {
+            let mut change = change_category.clone();
+            b.set_callback(move |_| change(i));
         }
+        if !user.can_access_reports() {
+            nav[3].deactivate();
+        }
+        if !user.is_admin() {
+            nav[4].deactivate();
+        }
+        let cashier_window = Rc::new(RefCell::new(None::<Window>));
+        let active_cashier = cashier_window.clone();
+        let p = pool.clone();
+        let u = user.clone();
+        cashier.set_callback(move |_| {
+            if let Some(w) = active_cashier.borrow_mut().as_mut() {
+                w.show();
+                return;
+            }
+            let mut view = KasirView::new();
+            transactions::bind_cashier(&mut view, p.clone(), u.clone());
+            view.win.show();
+            *active_cashier.borrow_mut() = Some(view.win);
+        });
+        let mut open = cashier.clone();
+        win.handle(move |_, event| {
+            if matches!(event, Event::KeyDown | Event::Shortcut)
+                && fltk::app::event_key() == Key::F1
+            {
+                open.do_callback();
+                return true;
+            }
+            false
+        });
+        let mut change = change_category;
+        change(0);
+        Self { win }
     }
 }

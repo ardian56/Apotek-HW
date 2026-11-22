@@ -1,3 +1,4 @@
+pub mod operations;
 pub mod pool;
 pub mod queries;
 

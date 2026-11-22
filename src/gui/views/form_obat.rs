@@ -8,6 +8,7 @@ use fltk::menu::Choice;
 use fltk::prelude::*;
 use fltk::window::Window;
 
+#[derive(Clone)]
 pub struct FormObatModal {
     pub win: Window,
     pub input_kode: Input,
@@ -17,10 +18,10 @@ pub struct FormObatModal {
     pub input_satuan_dasar: Input,
     pub input_harga_beli: Input,
     pub input_min_stok: Input,
-    
+
     // Multi-Satuan 1 (Dasar)
     pub input_harga_jual_1: Input,
-    
+
     // Multi-Satuan 2 (Strip / Blister)
     pub input_nama_satuan_2: Input,
     pub input_konversi_2: Input,
@@ -43,11 +44,13 @@ pub struct FormObatModal {
 impl FormObatModal {
     pub fn new(existing: Option<&Product>) -> Self {
         let is_edit = existing.is_some();
-        let title_text = if is_edit { "Edit Data Obat" } else { "Tambah Obat Baru" };
+        let title_text = if is_edit {
+            "Edit Data Obat"
+        } else {
+            "Tambah Obat Baru"
+        };
 
-        let mut win = Window::default()
-            .with_size(680, 660)
-            .with_label(title_text);
+        let mut win = Window::default().with_size(680, 660).with_label(title_text);
         win.set_color(AppTheme::BG_APP);
 
         // Header Modal
@@ -61,7 +64,13 @@ impl FormObatModal {
         lbl_title.set_label_color(AppTheme::PRIMARY);
         lbl_title.set_align(Align::Left | Align::Inside);
 
-        let mut lbl_sub = Frame::new(32, 38, 500, 18, "Lengkapi data obat, satuan konversi harga jual, dan batch awal");
+        let mut lbl_sub = Frame::new(
+            32,
+            38,
+            500,
+            18,
+            "Lengkapi data obat, satuan konversi harga jual, dan batch awal",
+        );
         lbl_sub.set_label_size(11);
         lbl_sub.set_label_color(AppTheme::TEXT_MUTED);
         lbl_sub.set_align(Align::Left | Align::Inside);
@@ -144,7 +153,8 @@ impl FormObatModal {
         card2.set_frame(FrameType::RFlatBox);
         card2.set_color(Color::White);
 
-        let mut sec2_title = Frame::new(32, 258, 300, 20, "2. Multi-Satuan & Harga Jual Bertingkat");
+        let mut sec2_title =
+            Frame::new(32, 258, 300, 20, "2. Multi-Satuan & Harga Jual Bertingkat");
         sec2_title.set_label_font(Font::HelveticaBold);
         sec2_title.set_label_size(13);
         sec2_title.set_label_color(AppTheme::TEXT_TITLE);
@@ -285,7 +295,7 @@ impl FormObatModal {
         btn_batal.set_label_color(AppTheme::TEXT_BODY);
         btn_batal.set_label_font(Font::HelveticaBold);
 
-        let mut btn_simpan = Button::new(520, 585, 144, 44, "💾 Simpan Obat");
+        let mut btn_simpan = Button::new(520, 585, 144, 44, "Simpan Obat");
         btn_simpan.set_frame(FrameType::RFlatBox);
         btn_simpan.set_color(AppTheme::PRIMARY);
         btn_simpan.set_label_color(Color::White);

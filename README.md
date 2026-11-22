@@ -2,6 +2,8 @@
 
 Aplikasi desktop *Point of Sale* (POS) dan manajemen inventori apotek yang dirancang **super ringan, cepat, dan stabil** untuk spesifikasi komputer rendah (Intel Core 2 Duo, RAM 1 GB, HDD, Windows 7 SP1 32-bit hingga Windows 11).
 
+Adaptasi modul demo video, pratinjau tampilan, dan batas pengujian tersedia di [panduan adaptasi desktop](docs/video-reference.md). Buka pratinjau tanpa database dengan `cargo run -- --preview`.
+
 ---
 
 ## 1. Arsitektur & Teknologi

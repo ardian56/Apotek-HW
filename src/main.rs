@@ -6,14 +6,14 @@ mod network;
 mod services;
 
 use db::{create_pool, DbConfig};
-use gui::theme::AppTheme;
-use gui::views::LoginView;
 use fltk::button::{Button, RoundButton};
 use fltk::dialog;
 use fltk::enums::{Align, Color, Font, FrameType};
 use fltk::frame::Frame;
 use fltk::prelude::*;
 use fltk::window::Window;
+use gui::theme::AppTheme;
+use gui::views::LoginView;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
@@ -57,7 +57,13 @@ fn prompt_first_run_config() -> AppConfig {
     title.set_label_size(16);
     title.set_label_color(AppTheme::PRIMARY);
 
-    let mut desc = Frame::new(20, 52, 420, 30, "Pilih peran komputer ini dalam jaringan apotek:");
+    let mut desc = Frame::new(
+        20,
+        52,
+        420,
+        30,
+        "Pilih peran komputer ini dalam jaringan apotek:",
+    );
     desc.set_label_size(12);
     desc.set_label_color(AppTheme::TEXT_MUTED);
 
@@ -69,7 +75,13 @@ fn prompt_first_run_config() -> AppConfig {
     radio_server.set_label_font(Font::HelveticaBold);
     radio_server.set_label_size(13);
 
-    let mut lbl_serv_desc = Frame::new(55, 130, 370, 20, "- Menyimpan database & melayani PC Kasir via LAN");
+    let mut lbl_serv_desc = Frame::new(
+        55,
+        130,
+        370,
+        20,
+        "- Menyimpan database & melayani PC Kasir via LAN",
+    );
     lbl_serv_desc.set_label_size(11);
     lbl_serv_desc.set_label_color(AppTheme::TEXT_MUTED);
     lbl_serv_desc.set_align(Align::Left | Align::Inside);
@@ -78,7 +90,13 @@ fn prompt_first_run_config() -> AppConfig {
     radio_client.set_label_font(Font::HelveticaBold);
     radio_client.set_label_size(13);
 
-    let mut lbl_cli_desc = Frame::new(55, 185, 370, 20, "- Hanyalah kasir (otomatis mencari PC Gudang di LAN)");
+    let mut lbl_cli_desc = Frame::new(
+        55,
+        185,
+        370,
+        20,
+        "- Hanyalah kasir (otomatis mencari PC Gudang di LAN)",
+    );
     lbl_cli_desc.set_label_size(11);
     lbl_cli_desc.set_label_color(AppTheme::TEXT_MUTED);
     lbl_cli_desc.set_align(Align::Left | Align::Inside);
@@ -173,12 +191,18 @@ fn main() {
         db_config.host = "127.0.0.1".to_string();
     } else {
         println!("[MODE CLIENT / PC KASIR AKTIF]");
-        print!("Mencari PC Gudang di LAN (UDP Broadcast port {})... ", network::DISCOVERY_PORT);
+        print!(
+            "Mencari PC Gudang di LAN (UDP Broadcast port {})... ",
+            network::DISCOVERY_PORT
+        );
         if let Some(server_ip) = network::scan_server_ip(2) {
             println!("DITEMUKAN di {}", server_ip);
             db_config.host = server_ip;
         } else {
-            println!("Broadcast timeout, menggunakan fallback host: {}", db_config.host);
+            println!(
+                "Broadcast timeout, menggunakan fallback host: {}",
+                db_config.host
+            );
         }
     }
 
@@ -199,6 +223,9 @@ fn main() {
     if is_server_mode {
         if let Err(e) = db::auto_migrate(&pool) {
             eprintln!("[AUTO-MIGRATION] Peringatan: {}", e);
+            dialog::alert_default(&format!("Skema database gagal disiapkan. Aplikasi dihentikan agar transaksi tidak memakai skema yang belum lengkap.\n{}",e));
+            is_running.store(false, Ordering::Relaxed);
+            return;
         } else {
             println!("[AUTO-MIGRATION] Skema tabel database siap & terverifikasi.");
         }
@@ -229,7 +256,7 @@ fn main() {
                 login_win_clone.hide();
 
                 // Buka AppShell Utama dengan Database Pool aktif
-                let mut shell = gui::views::AppShell::new(Some(pool_clone.clone()));
+                let mut shell = gui::views::AppShell::for_user(Some(pool_clone.clone()), user);
                 shell.win.show();
             }
             Ok(None) => {

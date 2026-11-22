@@ -186,3 +186,37 @@ CREATE TABLE IF NOT EXISTS settings (
     `key` VARCHAR(50) PRIMARY KEY,
     `value` TEXT NOT NULL
 ) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS payments (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    ref_type ENUM('PENJUALAN','PEMBELIAN') NOT NULL,
+    ref_id INT NOT NULL,
+    invoice_no VARCHAR(50) NOT NULL,
+    amount DECIMAL(15,2) NOT NULL,
+    operator_id INT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (operator_id) REFERENCES users(id),
+    INDEX idx_payment_ref (ref_type,ref_id)
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS returns (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    ref_type ENUM('PENJUALAN','PEMBELIAN') NOT NULL,
+    ref_id INT NOT NULL,
+    invoice_no VARCHAR(50) NOT NULL,
+    total_amount DECIMAL(15,2) NOT NULL,
+    refund_amount DECIMAL(15,2) NOT NULL,
+    reason TEXT NOT NULL,
+    operator_id INT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY idx_return_ref (ref_type,ref_id),
+    FOREIGN KEY (operator_id) REFERENCES users(id)
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS pending_purchases (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    operator_id INT NOT NULL,
+    cart_json LONGTEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (operator_id) REFERENCES users(id)
+) ENGINE=InnoDB;

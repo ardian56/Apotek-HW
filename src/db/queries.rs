@@ -2,18 +2,40 @@ use crate::models::{Product, ProductBatch, ProductUnit, Sale, User};
 use mysql::prelude::*;
 use mysql::*;
 
+pub fn input_error(message: &str) -> Error {
+    Error::IoError(std::io::Error::new(
+        std::io::ErrorKind::InvalidInput,
+        message,
+    ))
+}
+
 pub fn authenticate_user(pool: &Pool, username: &str, password: &str) -> Result<Option<User>> {
     let mut conn = pool.get_conn()?;
-    let query = "SELECT id, username, full_name, role FROM users WHERE username = :u AND password_hash = :p AND is_active = 1 LIMIT 1";
-    let res: Option<(i32, String, String, String)> = conn.exec_first(
+    let query = "SELECT id, username, full_name, role, password_hash FROM users WHERE username = :u AND is_active = 1 LIMIT 1";
+    let res: Option<(i32, String, String, String, String)> = conn.exec_first(
         query,
         params! {
             "u" => username,
-            "p" => password,
         },
     )?;
 
-    if let Some((id, uname, fname, role)) = res {
+    if let Some((id, uname, fname, role, hash)) = res {
+        let legacy = !hash.starts_with("$2");
+        let valid = if legacy {
+            hash == password
+        } else {
+            password.len() <= 72 && bcrypt::verify(password, &hash).unwrap_or(false)
+        };
+        if !valid {
+            return Ok(None);
+        }
+        if legacy && password.len() <= 72 {
+            let hash = bcrypt::hash(password, 12).map_err(|e| input_error(&e.to_string()))?;
+            conn.exec_drop(
+                "UPDATE users SET password_hash=:hash WHERE id=:id",
+                params! {"hash"=>hash,"id"=>id},
+            )?;
+        }
         Ok(Some(User {
             id,
             username: uname,
@@ -27,18 +49,11 @@ pub fn authenticate_user(pool: &Pool, username: &str, password: &str) -> Result<
 
 pub fn get_products(pool: &Pool, search: Option<&str>) -> Result<Vec<Product>> {
     let mut conn = pool.get_conn()?;
-    
-    let sql = match search {
-        Some(s) if !s.trim().is_empty() => format!(
-            "SELECT id, code, name, category, supplier_id, base_unit, min_stock, buy_price, is_active \
-             FROM products WHERE is_active = 1 AND (code LIKE '%{}%' OR name LIKE '%{}%') ORDER BY name ASC LIMIT 200",
-            s.replace('\'', "''"), s.replace('\'', "''")
-        ),
-        _ => "SELECT id, code, name, category, supplier_id, base_unit, min_stock, buy_price, is_active \
-              FROM products WHERE is_active = 1 ORDER BY name ASC LIMIT 200".to_string(),
-    };
 
-    let rows: Vec<(i32, String, String, Option<String>, Option<i32>, String, i32, f64, i8)> = conn.query(sql)?;
+    let pattern = format!("%{}%", search.unwrap_or("").trim());
+    let rows: Vec<(i32, String, String, Option<String>, Option<i32>, String, i32, f64, i8)> = conn.exec(
+        "SELECT id,code,name,category,supplier_id,base_unit,min_stock,buy_price,is_active FROM products WHERE is_active=1 AND (code LIKE :search OR name LIKE :search) ORDER BY name LIMIT 200",
+        params!{"search"=>pattern})?;
     let mut products = Vec::with_capacity(rows.len());
 
     for (id, code, name, cat, sup_id, base_unit, min_stock, buy_price, is_active) in rows {
@@ -103,6 +118,7 @@ pub fn get_products(pool: &Pool, search: Option<&str>) -> Result<Vec<Product>> {
 
 /// Eksekusi transaksi penjualan dengan FEFO (First Expired First Out)
 pub fn execute_sale_transaction_fefo(pool: &Pool, mut sale: Sale) -> Result<String> {
+    super::operations::validate_sale(&sale).map_err(|e| input_error(&e))?;
     let mut conn = pool.get_conn()?;
     let mut tx = conn.start_transaction(TxOpts::default())?;
 
@@ -132,6 +148,19 @@ pub fn execute_sale_transaction_fefo(pool: &Pool, mut sale: Sale) -> Result<Stri
 
     // 2. Proses tiap item belanja
     for item in &mut sale.items {
+        let product: Option<i32> = tx.exec_first(
+            "SELECT id FROM products WHERE id=:pid AND is_active=1 FOR UPDATE",
+            params! {"pid"=>item.product_id},
+        )?;
+        if product.is_none() {
+            return Err(input_error("Obat tidak aktif atau tidak ditemukan"));
+        }
+        let unit:Option<i32>=tx.exec_first("SELECT conversion_qty FROM product_units WHERE product_id=:pid AND unit_name=:unit LIMIT 1",params!{"pid"=>item.product_id,"unit"=>&item.unit_name})?;
+        if unit != Some(item.conversion_qty) {
+            return Err(input_error(
+                "Satuan atau konversi telah berubah. Tambahkan ulang obat.",
+            ));
+        }
         tx.exec_drop(
             "INSERT INTO sale_items (sale_id, product_id, unit_name, qty, conversion_qty, qty_in_base, sell_price, discount, subtotal) \
              VALUES (:sid, :pid, :uname, :q, :conv, :qbase, :sp, :disc, :sub)",
@@ -154,7 +183,8 @@ pub fn execute_sale_transaction_fefo(pool: &Pool, mut sale: Sale) -> Result<Stri
         // Ambil batch dengan kriteria FEFO (expired_date ASC) dengan SELECT FOR UPDATE
         let batch_rows: Vec<(i32, String, i32, f64)> = tx.exec(
             "SELECT id, batch_no, stock, buy_price FROM product_batches \
-             WHERE product_id = :pid AND stock > 0 ORDER BY expired_date ASC, id ASC FOR UPDATE",
+             WHERE product_id = :pid AND stock > 0 AND (expired_date IS NULL OR expired_date > CURRENT_DATE) \
+             ORDER BY expired_date IS NULL, expired_date ASC, id ASC FOR UPDATE",
             params! { "pid" => item.product_id },
         )?;
 
@@ -164,6 +194,10 @@ pub fn execute_sale_transaction_fefo(pool: &Pool, mut sale: Sale) -> Result<Stri
             }
 
             let deduct = std::cmp::min(needed_qty, stock);
+            let effective_price = item.subtotal / item.qty_in_base as f64;
+            if effective_price + 0.001 < buy_price {
+                return Err(input_error("Harga setelah diskon di bawah modal batch"));
+            }
             needed_qty -= deduct;
 
             // Kurangi stok batch
@@ -190,6 +224,13 @@ pub fn execute_sale_transaction_fefo(pool: &Pool, mut sale: Sale) -> Result<Stri
             total_profit += jual_proporsi - modal;
         }
 
+        if needed_qty > 0 {
+            return Err(input_error(&format!(
+                "Stok layak jual '{}' tidak cukup. Transaksi dibatalkan",
+                item.product_name
+            )));
+        }
+
         // Catat Kartu Stok
         tx.exec_drop(
             "INSERT INTO stock_cards (product_id, ref_type, ref_no, qty_in, qty_out, balance_after) \
@@ -206,7 +247,7 @@ pub fn execute_sale_transaction_fefo(pool: &Pool, mut sale: Sale) -> Result<Stri
     // Update total profit di sales
     tx.exec_drop(
         "UPDATE sales SET total_profit = :prof WHERE id = :sid",
-        params! { "prof" => total_profit, "sid" => sale_id },
+        params! { "prof" => total_profit - sale.discount, "sid" => sale_id },
     )?;
 
     tx.commit()?;
@@ -219,16 +260,72 @@ pub fn auto_migrate(pool: &Pool) -> Result<()> {
     const SCHEMA_SQL: &str = include_str!("../../sql/schema.sql");
     const SEED_SQL: &str = include_str!("../../sql/seed.sql");
 
-    for sql in [SCHEMA_SQL, SEED_SQL] {
+    for sql in [SCHEMA_SQL] {
         for stmt in sql.split(';') {
             let clean = stmt
                 .lines()
-                .filter(|line| !line.trim_start().starts_with("--") && !line.trim_start().starts_with('#'))
+                .filter(|line| {
+                    !line.trim_start().starts_with("--") && !line.trim_start().starts_with('#')
+                })
                 .collect::<Vec<_>>()
                 .join("\n");
             let trimmed = clean.trim();
-            if !trimmed.is_empty() {
-                let _ = conn.query_drop(trimmed);
+            if !trimmed.is_empty()
+                && !trimmed.starts_with("CREATE DATABASE")
+                && !trimmed.starts_with("USE ")
+            {
+                conn.query_drop(trimmed)?;
+            }
+        }
+    }
+
+    for (table, column, definition) in [
+        (
+            "purchases",
+            "payment_type",
+            "ENUM('TUNAI','KREDIT') NOT NULL DEFAULT 'TUNAI'",
+        ),
+        ("purchases", "due_date", "DATE NULL"),
+        (
+            "purchases",
+            "paid_amount",
+            "DECIMAL(15,2) NOT NULL DEFAULT 0",
+        ),
+        ("purchases", "discount", "DECIMAL(15,2) NOT NULL DEFAULT 0"),
+        (
+            "purchases",
+            "tax_percent",
+            "DECIMAL(5,2) NOT NULL DEFAULT 0",
+        ),
+        ("purchase_items", "batch_id", "INT NULL"),
+        ("customers", "is_active", "TINYINT(1) NOT NULL DEFAULT 1"),
+        ("doctors", "is_active", "TINYINT(1) NOT NULL DEFAULT 1"),
+    ] {
+        let exists: Option<u64> = conn.exec_first(
+            "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name=:t AND column_name=:c",
+            params! {"t"=>table,"c"=>column})?;
+        if exists == Some(0) {
+            conn.query_drop(format!(
+                "ALTER TABLE {table} ADD COLUMN {column} {definition}"
+            ))?;
+            if table == "purchases" && column == "paid_amount" {
+                conn.query_drop(
+                    "UPDATE purchases SET paid_amount=total_amount WHERE payment_type='TUNAI'",
+                )?;
+            }
+        }
+    }
+    let users: u64 = conn.query_first("SELECT COUNT(*) FROM users")?.unwrap_or(0);
+    if users == 0 {
+        for stmt in SEED_SQL.split(';') {
+            let clean = stmt
+                .lines()
+                .filter(|l| !l.trim_start().starts_with("--"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let clean = clean.trim();
+            if !clean.is_empty() && !clean.starts_with("USE ") {
+                conn.query_drop(clean)?;
             }
         }
     }
@@ -251,10 +348,42 @@ pub struct NewProductInput {
     pub initial_stock: i32,
 }
 
+impl NewProductInput {
+    pub fn validate(&self) -> Result<()> {
+        if self.code.trim().is_empty()
+            || self.name.trim().is_empty()
+            || self.base_unit.trim().is_empty()
+            || self.min_stock < 0
+            || self.initial_stock < 0
+            || self.units.is_empty()
+        {
+            return Err(input_error("Kode, nama, satuan, dan stok wajib valid"));
+        }
+        super::operations::money(&self.buy_price.to_string()).map_err(|e| input_error(&e))?;
+        let mut names = std::collections::BTreeSet::new();
+        for (name, conversion, price) in &self.units {
+            if name.trim().is_empty() || *conversion <= 0 || !names.insert(name.to_lowercase()) {
+                return Err(input_error("Nama satuan harus unik dan konversi positif"));
+            }
+            super::operations::money(&price.to_string()).map_err(|e| input_error(&e))?;
+        }
+        if let Some(expiry) = &self.expired_date {
+            super::operations::date(expiry).map_err(|e| input_error(&e))?;
+        }
+        Ok(())
+    }
+}
+
 pub fn insert_product(pool: &Pool, p: &NewProductInput) -> Result<i32> {
+    p.validate()?;
     let mut conn = pool.get_conn()?;
     let mut tx = conn.start_transaction(TxOpts::default())?;
+    let id = insert_product_in_tx(&mut tx, p)?;
+    tx.commit()?;
+    Ok(id)
+}
 
+fn insert_product_in_tx(tx: &mut Transaction<'_>, p: &NewProductInput) -> Result<i32> {
     tx.exec_drop(
         "INSERT INTO products (code, name, category, supplier_id, base_unit, min_stock, buy_price, is_active) \
          VALUES (:code, :name, :cat, :sup, :unit, :min, :buy, 1)",
@@ -287,7 +416,11 @@ pub fn insert_product(pool: &Pool, p: &NewProductInput) -> Result<i32> {
     }
 
     if p.initial_stock > 0 {
-        let bno = if p.batch_no.trim().is_empty() { "B001".to_string() } else { p.batch_no.clone() };
+        let bno = if p.batch_no.trim().is_empty() {
+            "B001".to_string()
+        } else {
+            p.batch_no.clone()
+        };
         tx.exec_drop(
             "INSERT INTO product_batches (product_id, batch_no, expired_date, stock, buy_price) \
              VALUES (:pid, :bno, :exp, :stock, :buy)",
@@ -314,13 +447,51 @@ pub fn insert_product(pool: &Pool, p: &NewProductInput) -> Result<i32> {
         )?;
     }
 
-    tx.commit()?;
     Ok(prod_id)
+}
+
+pub fn import_product_inputs(pool: &Pool, products: &[NewProductInput]) -> Result<()> {
+    for product in products {
+        product.validate()?;
+    }
+    let mut conn = pool.get_conn()?;
+    let mut tx = conn.start_transaction(TxOpts::default())?;
+    for product in products {
+        insert_product_in_tx(&mut tx, product)?;
+    }
+    tx.commit()
+}
+
+pub fn update_product(pool: &Pool, id: i32, p: &NewProductInput) -> Result<()> {
+    p.validate()?;
+    let mut conn = pool.get_conn()?;
+    let mut tx = conn.start_transaction(TxOpts::default())?;
+    let unit: Option<String> = tx.exec_first(
+        "SELECT base_unit FROM products WHERE id=:id FOR UPDATE",
+        params! {"id"=>id},
+    )?;
+    if unit.as_deref() != Some(p.base_unit.as_str()) {
+        return Err(input_error(
+            "Satuan dasar obat yang sudah dibuat tidak dapat diubah",
+        ));
+    }
+    tx.exec_drop("UPDATE products SET code=:code,name=:name,category=:category,supplier_id=:sup,min_stock=:min,buy_price=:buy WHERE id=:id",params!{"id"=>id,"code"=>&p.code,"name"=>&p.name,"category"=>&p.category,"sup"=>p.supplier_id,"min"=>p.min_stock,"buy"=>p.buy_price})?;
+    tx.exec_drop(
+        "DELETE FROM product_units WHERE product_id=:id",
+        params! {"id"=>id},
+    )?;
+    for (name, conversion, price) in &p.units {
+        tx.exec_drop("INSERT INTO product_units(product_id,unit_name,conversion_qty,sell_price) VALUES(:id,:name,:conv,:price)",params!{"id"=>id,"name"=>name,"conv"=>conversion,"price"=>price})?;
+    }
+    tx.commit()
 }
 
 pub fn delete_product(pool: &Pool, id: i32) -> Result<()> {
     let mut conn = pool.get_conn()?;
-    conn.exec_drop("UPDATE products SET is_active = 0 WHERE id = :id", params! { "id" => id })?;
+    conn.exec_drop(
+        "UPDATE products SET is_active = 0 WHERE id = :id",
+        params! { "id" => id },
+    )?;
     Ok(())
 }
 
@@ -328,11 +499,19 @@ pub fn delete_product(pool: &Pool, id: i32) -> Result<()> {
 pub fn get_suppliers(pool: &Pool) -> Result<Vec<(i32, String, String, String)>> {
     let mut conn = pool.get_conn()?;
     let rows: Vec<(i32, String, Option<String>, Option<String>)> = conn.query(
-        "SELECT id, name, phone, address FROM suppliers WHERE is_active = 1 ORDER BY name ASC"
+        "SELECT id, name, phone, address FROM suppliers WHERE is_active = 1 ORDER BY name ASC",
     )?;
-    Ok(rows.into_iter().map(|(id, name, p, a)| {
-        (id, name, p.unwrap_or_else(|| "-".to_string()), a.unwrap_or_else(|| "-".to_string()))
-    }).collect())
+    Ok(rows
+        .into_iter()
+        .map(|(id, name, p, a)| {
+            (
+                id,
+                name,
+                p.unwrap_or_else(|| "-".to_string()),
+                a.unwrap_or_else(|| "-".to_string()),
+            )
+        })
+        .collect())
 }
 
 pub fn insert_supplier(pool: &Pool, name: &str, phone: &str, address: &str) -> Result<i32> {
@@ -352,11 +531,19 @@ pub fn insert_supplier(pool: &Pool, name: &str, phone: &str, address: &str) -> R
 pub fn get_customers(pool: &Pool) -> Result<Vec<(i32, String, String, String)>> {
     let mut conn = pool.get_conn()?;
     let rows: Vec<(i32, String, Option<String>, Option<String>)> = conn.query(
-        "SELECT id, name, phone, address FROM customers ORDER BY name ASC"
+        "SELECT id, name, phone, address FROM customers WHERE is_active=1 ORDER BY name ASC",
     )?;
-    Ok(rows.into_iter().map(|(id, name, p, a)| {
-        (id, name, p.unwrap_or_else(|| "-".to_string()), a.unwrap_or_else(|| "-".to_string()))
-    }).collect())
+    Ok(rows
+        .into_iter()
+        .map(|(id, name, p, a)| {
+            (
+                id,
+                name,
+                p.unwrap_or_else(|| "-".to_string()),
+                a.unwrap_or_else(|| "-".to_string()),
+            )
+        })
+        .collect())
 }
 
 pub fn insert_customer(pool: &Pool, name: &str, phone: &str, address: &str) -> Result<i32> {
@@ -375,12 +562,12 @@ pub fn insert_customer(pool: &Pool, name: &str, phone: &str, address: &str) -> R
 // Doctors
 pub fn get_doctors(pool: &Pool) -> Result<Vec<(i32, String, String)>> {
     let mut conn = pool.get_conn()?;
-    let rows: Vec<(i32, String, Option<String>)> = conn.query(
-        "SELECT id, name, sip_no FROM doctors ORDER BY name ASC"
-    )?;
-    Ok(rows.into_iter().map(|(id, name, s)| {
-        (id, name, s.unwrap_or_else(|| "-".to_string()))
-    }).collect())
+    let rows: Vec<(i32, String, Option<String>)> =
+        conn.query("SELECT id, name, sip_no FROM doctors WHERE is_active=1 ORDER BY name ASC")?;
+    Ok(rows
+        .into_iter()
+        .map(|(id, name, s)| (id, name, s.unwrap_or_else(|| "-".to_string())))
+        .collect())
 }
 
 pub fn insert_doctor(pool: &Pool, name: &str, sip_no: &str) -> Result<i32> {
@@ -399,12 +586,28 @@ pub fn insert_doctor(pool: &Pool, name: &str, sip_no: &str) -> Result<i32> {
 pub fn get_users_list(pool: &Pool) -> Result<Vec<(i32, String, String, String, i8)>> {
     let mut conn = pool.get_conn()?;
     let rows: Vec<(i32, String, String, String, i8)> = conn.query(
-        "SELECT id, username, full_name, role, is_active FROM users ORDER BY full_name ASC"
+        "SELECT id, username, full_name, role, is_active FROM users ORDER BY full_name ASC",
     )?;
     Ok(rows)
 }
 
-pub fn insert_user(pool: &Pool, username: &str, password_hash: &str, full_name: &str, role: &str) -> Result<i32> {
+pub fn insert_user(
+    pool: &Pool,
+    username: &str,
+    password_hash: &str,
+    full_name: &str,
+    role: &str,
+) -> Result<i32> {
+    if username.trim().is_empty()
+        || full_name.trim().is_empty()
+        || !(8..=72).contains(&password_hash.len())
+        || !matches!(role, "ADMIN" | "KASIR" | "GUDANG")
+    {
+        return Err(input_error(
+            "Username, nama, role, dan password minimal 8 karakter wajib diisi",
+        ));
+    }
+    let password_hash = bcrypt::hash(password_hash, 12).map_err(|e| input_error(&e.to_string()))?;
     let mut conn = pool.get_conn()?;
     conn.exec_drop(
         "INSERT INTO users (username, password_hash, full_name, role, is_active) \
@@ -428,59 +631,60 @@ pub fn get_stock_opname_items(pool: &Pool) -> Result<Vec<(i32, String, String, S
          LEFT JOIN product_batches b ON p.id = b.product_id \
          WHERE p.is_active = 1 \
          GROUP BY p.id, p.code, p.name, p.base_unit \
-         ORDER BY p.name ASC"
+         ORDER BY p.name ASC",
     )?;
     Ok(rows)
 }
 
-pub fn save_stock_opname_adjustment(pool: &Pool, product_id: i32, real_stock: i32, reason: &str) -> Result<()> {
+pub fn save_stock_opname_adjustment(
+    pool: &Pool,
+    product_id: i32,
+    real_stock: i32,
+    reason: &str,
+) -> Result<()> {
+    if real_stock < 0 || reason.trim().is_empty() {
+        return Err(input_error(
+            "Stok tidak boleh negatif dan alasan wajib diisi",
+        ));
+    }
     let mut conn = pool.get_conn()?;
     let mut tx = conn.start_transaction(TxOpts::default())?;
-
-    let cur_stock: i32 = tx.exec_first(
-        "SELECT COALESCE(SUM(stock), 0) FROM product_batches WHERE product_id = :pid",
-        params! { "pid" => product_id },
-    )?.unwrap_or(0);
-
-    let selisih = real_stock - cur_stock;
-    if selisih != 0 {
-        let latest_batch: Option<(i32, i32)> = tx.exec_first(
-            "SELECT id, stock FROM product_batches WHERE product_id = :pid ORDER BY id DESC LIMIT 1",
-            params! { "pid" => product_id },
-        )?;
-
-        let batch_id = match latest_batch {
-            Some((bid, st)) => {
-                let new_st = std::cmp::max(0, st + selisih);
-                tx.exec_drop("UPDATE product_batches SET stock = :st WHERE id = :bid", params! { "st" => new_st, "bid" => bid })?;
-                bid
+    let price: Option<f64> = tx.exec_first(
+        "SELECT buy_price FROM products WHERE id=:pid AND is_active=1 FOR UPDATE",
+        params! {"pid"=>product_id},
+    )?;
+    let price = price.ok_or_else(|| input_error("Obat tidak ditemukan"))?;
+    let batches: Vec<(i32, i32)> = tx.exec(
+        "SELECT id,stock FROM product_batches WHERE product_id=:pid ORDER BY id DESC FOR UPDATE",
+        params! {"pid"=>product_id},
+    )?;
+    let current = batches.iter().map(|(_, n)| *n as i64).sum::<i64>();
+    let difference = real_stock as i64 - current;
+    if difference > 0 {
+        if let Some((id, stock)) = batches.first() {
+            tx.exec_drop(
+                "UPDATE product_batches SET stock=:stock WHERE id=:id",
+                params! {"stock"=>*stock as i64+difference,"id"=>id},
+            )?;
+        } else {
+            tx.exec_drop("INSERT INTO product_batches(product_id,batch_no,stock,buy_price) VALUES(:pid,'OPNAME',:stock,:price)",params!{"pid"=>product_id,"stock"=>real_stock,"price"=>price})?;
+        }
+    } else if difference < 0 {
+        let mut remaining = -difference;
+        for (id, stock) in batches {
+            let take = remaining.min(stock as i64);
+            remaining -= take;
+            tx.exec_drop(
+                "UPDATE product_batches SET stock = stock - :take WHERE id=:id",
+                params! {"take"=>take,"id"=>id},
+            )?;
+            if remaining == 0 {
+                break;
             }
-            None => {
-                tx.exec_drop(
-                    "INSERT INTO product_batches (product_id, batch_no, expired_date, stock, buy_price) \
-                     VALUES (:pid, 'OPNAME', DATE_ADD(CURRENT_DATE, INTERVAL 1 YEAR), :st, 0)",
-                    params! { "pid" => product_id, "st" => real_stock },
-                )?;
-                tx.last_insert_id().unwrap_or(0) as i32
-            }
-        };
-
-        let (qin, qout) = if selisih > 0 { (selisih, 0) } else { (0, -selisih) };
-        tx.exec_drop(
-            "INSERT INTO stock_cards (product_id, batch_id, ref_type, ref_no, qty_in, qty_out, balance_after) \
-             VALUES (:pid, :bid, 'OPNAME', :note, :qin, :qout, :bal)",
-            params! {
-                "pid" => product_id,
-                "bid" => batch_id,
-                "note" => reason,
-                "qin" => qin,
-                "qout" => qout,
-                "bal" => real_stock,
-            },
-        )?;
+        }
     }
-
-    tx.commit()?;
-    Ok(())
+    if difference != 0 {
+        tx.exec_drop("INSERT INTO stock_cards(product_id,ref_type,ref_no,qty_in,qty_out,balance_after) VALUES(:pid,'OPNAME',:reason,:qin,:qout,:balance)",params!{"pid"=>product_id,"reason"=>reason,"qin"=>difference.max(0),"qout"=>(-difference).max(0),"balance"=>real_stock})?;
+    }
+    tx.commit()
 }
-
