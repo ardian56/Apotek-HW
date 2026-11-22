@@ -14,8 +14,8 @@ impl Default for DbConfig {
         Self {
             host: "127.0.0.1".to_string(),
             port: 3306,
-            user: "root".to_string(),
-            pass: "root".to_string(),
+            user: "apotek".to_string(),
+            pass: "apotek123".to_string(),
             db_name: "apotek_db".to_string(),
         }
     }

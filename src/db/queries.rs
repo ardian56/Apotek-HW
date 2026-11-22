@@ -5,7 +5,7 @@ use mysql::*;
 pub fn authenticate_user(pool: &Pool, username: &str, password: &str) -> Result<Option<User>> {
     let mut conn = pool.get_conn()?;
     let query = "SELECT id, username, full_name, role FROM users WHERE username = :u AND password_hash = :p AND is_active = 1 LIMIT 1";
-    let res = conn.exec_first::<(i32, String, String, String), _>(
+    let res: Option<(i32, String, String, String)> = conn.exec_first(
         query,
         params! {
             "u" => username,
@@ -233,6 +233,254 @@ pub fn auto_migrate(pool: &Pool) -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+#[derive(Debug, Clone)]
+pub struct NewProductInput {
+    pub code: String,
+    pub name: String,
+    pub category: String,
+    pub supplier_id: Option<i32>,
+    pub base_unit: String,
+    pub min_stock: i32,
+    pub buy_price: f64,
+    pub units: Vec<(String, i32, f64)>, // (unit_name, conversion_qty, sell_price)
+    pub batch_no: String,
+    pub expired_date: Option<String>,
+    pub initial_stock: i32,
+}
+
+pub fn insert_product(pool: &Pool, p: &NewProductInput) -> Result<i32> {
+    let mut conn = pool.get_conn()?;
+    let mut tx = conn.start_transaction(TxOpts::default())?;
+
+    tx.exec_drop(
+        "INSERT INTO products (code, name, category, supplier_id, base_unit, min_stock, buy_price, is_active) \
+         VALUES (:code, :name, :cat, :sup, :unit, :min, :buy, 1)",
+        params! {
+            "code" => &p.code,
+            "name" => &p.name,
+            "cat" => &p.category,
+            "sup" => p.supplier_id,
+            "unit" => &p.base_unit,
+            "min" => p.min_stock,
+            "buy" => p.buy_price,
+        },
+    )?;
+
+    let prod_id: i32 = tx.last_insert_id().unwrap_or(0) as i32;
+
+    for (u_name, conv, sell_price) in &p.units {
+        if !u_name.trim().is_empty() {
+            tx.exec_drop(
+                "INSERT INTO product_units (product_id, unit_name, conversion_qty, sell_price) \
+                 VALUES (:pid, :uname, :conv, :sell)",
+                params! {
+                    "pid" => prod_id,
+                    "uname" => u_name,
+                    "conv" => conv,
+                    "sell" => sell_price,
+                },
+            )?;
+        }
+    }
+
+    if p.initial_stock > 0 {
+        let bno = if p.batch_no.trim().is_empty() { "B001".to_string() } else { p.batch_no.clone() };
+        tx.exec_drop(
+            "INSERT INTO product_batches (product_id, batch_no, expired_date, stock, buy_price) \
+             VALUES (:pid, :bno, :exp, :stock, :buy)",
+            params! {
+                "pid" => prod_id,
+                "bno" => &bno,
+                "exp" => &p.expired_date,
+                "stock" => p.initial_stock,
+                "buy" => p.buy_price,
+            },
+        )?;
+
+        let batch_id: i32 = tx.last_insert_id().unwrap_or(0) as i32;
+
+        tx.exec_drop(
+            "INSERT INTO stock_cards (product_id, batch_id, ref_type, ref_no, qty_in, qty_out, balance_after) \
+             VALUES (:pid, :bid, 'OPNAME', 'STOK-AWAL', :qin, 0, :bal)",
+            params! {
+                "pid" => prod_id,
+                "bid" => batch_id,
+                "qin" => p.initial_stock,
+                "bal" => p.initial_stock,
+            },
+        )?;
+    }
+
+    tx.commit()?;
+    Ok(prod_id)
+}
+
+pub fn delete_product(pool: &Pool, id: i32) -> Result<()> {
+    let mut conn = pool.get_conn()?;
+    conn.exec_drop("UPDATE products SET is_active = 0 WHERE id = :id", params! { "id" => id })?;
+    Ok(())
+}
+
+// Supliers
+pub fn get_suppliers(pool: &Pool) -> Result<Vec<(i32, String, String, String)>> {
+    let mut conn = pool.get_conn()?;
+    let rows: Vec<(i32, String, Option<String>, Option<String>)> = conn.query(
+        "SELECT id, name, phone, address FROM suppliers WHERE is_active = 1 ORDER BY name ASC"
+    )?;
+    Ok(rows.into_iter().map(|(id, name, p, a)| {
+        (id, name, p.unwrap_or_else(|| "-".to_string()), a.unwrap_or_else(|| "-".to_string()))
+    }).collect())
+}
+
+pub fn insert_supplier(pool: &Pool, name: &str, phone: &str, address: &str) -> Result<i32> {
+    let mut conn = pool.get_conn()?;
+    conn.exec_drop(
+        "INSERT INTO suppliers (name, phone, address, is_active) VALUES (:name, :phone, :addr, 1)",
+        params! {
+            "name" => name,
+            "phone" => phone,
+            "addr" => address,
+        },
+    )?;
+    Ok(conn.last_insert_id() as i32)
+}
+
+// Customers
+pub fn get_customers(pool: &Pool) -> Result<Vec<(i32, String, String, String)>> {
+    let mut conn = pool.get_conn()?;
+    let rows: Vec<(i32, String, Option<String>, Option<String>)> = conn.query(
+        "SELECT id, name, phone, address FROM customers ORDER BY name ASC"
+    )?;
+    Ok(rows.into_iter().map(|(id, name, p, a)| {
+        (id, name, p.unwrap_or_else(|| "-".to_string()), a.unwrap_or_else(|| "-".to_string()))
+    }).collect())
+}
+
+pub fn insert_customer(pool: &Pool, name: &str, phone: &str, address: &str) -> Result<i32> {
+    let mut conn = pool.get_conn()?;
+    conn.exec_drop(
+        "INSERT INTO customers (name, phone, address) VALUES (:name, :phone, :addr)",
+        params! {
+            "name" => name,
+            "phone" => phone,
+            "addr" => address,
+        },
+    )?;
+    Ok(conn.last_insert_id() as i32)
+}
+
+// Doctors
+pub fn get_doctors(pool: &Pool) -> Result<Vec<(i32, String, String)>> {
+    let mut conn = pool.get_conn()?;
+    let rows: Vec<(i32, String, Option<String>)> = conn.query(
+        "SELECT id, name, sip_no FROM doctors ORDER BY name ASC"
+    )?;
+    Ok(rows.into_iter().map(|(id, name, s)| {
+        (id, name, s.unwrap_or_else(|| "-".to_string()))
+    }).collect())
+}
+
+pub fn insert_doctor(pool: &Pool, name: &str, sip_no: &str) -> Result<i32> {
+    let mut conn = pool.get_conn()?;
+    conn.exec_drop(
+        "INSERT INTO doctors (name, sip_no) VALUES (:name, :sip)",
+        params! {
+            "name" => name,
+            "sip" => sip_no,
+        },
+    )?;
+    Ok(conn.last_insert_id() as i32)
+}
+
+// Users
+pub fn get_users_list(pool: &Pool) -> Result<Vec<(i32, String, String, String, i8)>> {
+    let mut conn = pool.get_conn()?;
+    let rows: Vec<(i32, String, String, String, i8)> = conn.query(
+        "SELECT id, username, full_name, role, is_active FROM users ORDER BY full_name ASC"
+    )?;
+    Ok(rows)
+}
+
+pub fn insert_user(pool: &Pool, username: &str, password_hash: &str, full_name: &str, role: &str) -> Result<i32> {
+    let mut conn = pool.get_conn()?;
+    conn.exec_drop(
+        "INSERT INTO users (username, password_hash, full_name, role, is_active) \
+         VALUES (:u, :p, :fn, :role, 1)",
+        params! {
+            "u" => username,
+            "p" => password_hash,
+            "fn" => full_name,
+            "role" => role,
+        },
+    )?;
+    Ok(conn.last_insert_id() as i32)
+}
+
+// Stock Opname
+pub fn get_stock_opname_items(pool: &Pool) -> Result<Vec<(i32, String, String, String, i32)>> {
+    let mut conn = pool.get_conn()?;
+    let rows: Vec<(i32, String, String, String, i32)> = conn.query(
+        "SELECT p.id, p.code, p.name, p.base_unit, COALESCE(SUM(b.stock), 0) AS total_stock \
+         FROM products p \
+         LEFT JOIN product_batches b ON p.id = b.product_id \
+         WHERE p.is_active = 1 \
+         GROUP BY p.id, p.code, p.name, p.base_unit \
+         ORDER BY p.name ASC"
+    )?;
+    Ok(rows)
+}
+
+pub fn save_stock_opname_adjustment(pool: &Pool, product_id: i32, real_stock: i32, reason: &str) -> Result<()> {
+    let mut conn = pool.get_conn()?;
+    let mut tx = conn.start_transaction(TxOpts::default())?;
+
+    let cur_stock: i32 = tx.exec_first(
+        "SELECT COALESCE(SUM(stock), 0) FROM product_batches WHERE product_id = :pid",
+        params! { "pid" => product_id },
+    )?.unwrap_or(0);
+
+    let selisih = real_stock - cur_stock;
+    if selisih != 0 {
+        let latest_batch: Option<(i32, i32)> = tx.exec_first(
+            "SELECT id, stock FROM product_batches WHERE product_id = :pid ORDER BY id DESC LIMIT 1",
+            params! { "pid" => product_id },
+        )?;
+
+        let batch_id = match latest_batch {
+            Some((bid, st)) => {
+                let new_st = std::cmp::max(0, st + selisih);
+                tx.exec_drop("UPDATE product_batches SET stock = :st WHERE id = :bid", params! { "st" => new_st, "bid" => bid })?;
+                bid
+            }
+            None => {
+                tx.exec_drop(
+                    "INSERT INTO product_batches (product_id, batch_no, expired_date, stock, buy_price) \
+                     VALUES (:pid, 'OPNAME', DATE_ADD(CURRENT_DATE, INTERVAL 1 YEAR), :st, 0)",
+                    params! { "pid" => product_id, "st" => real_stock },
+                )?;
+                tx.last_insert_id().unwrap_or(0) as i32
+            }
+        };
+
+        let (qin, qout) = if selisih > 0 { (selisih, 0) } else { (0, -selisih) };
+        tx.exec_drop(
+            "INSERT INTO stock_cards (product_id, batch_id, ref_type, ref_no, qty_in, qty_out, balance_after) \
+             VALUES (:pid, :bid, 'OPNAME', :note, :qin, :qout, :bal)",
+            params! {
+                "pid" => product_id,
+                "bid" => batch_id,
+                "note" => reason,
+                "qin" => qin,
+                "qout" => qout,
+                "bal" => real_stock,
+            },
+        )?;
+    }
+
+    tx.commit()?;
     Ok(())
 }
 

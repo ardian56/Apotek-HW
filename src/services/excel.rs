@@ -1,5 +1,5 @@
 use crate::models::Product;
-use calamine::{open_workbook_auto, DataType, Reader};
+use calamine::{open_workbook_auto, Data, Reader};
 use rust_xlsxwriter::{Format, Workbook};
 use std::path::Path;
 
@@ -75,9 +75,9 @@ pub fn import_products_from_excel<P: AsRef<Path>>(path: P) -> Result<Vec<Importe
         }
 
         let code = match &row[0] {
-            DataType::String(s) => s.trim().to_string(),
-            DataType::Int(n) => n.to_string(),
-            DataType::Float(f) => format!("{:.0}", f),
+            Data::String(s) => s.trim().to_string(),
+            Data::Int(n) => n.to_string(),
+            Data::Float(f) => format!("{:.0}", f),
             _ => continue,
         };
 
@@ -86,29 +86,29 @@ pub fn import_products_from_excel<P: AsRef<Path>>(path: P) -> Result<Vec<Importe
         }
 
         let name = match &row[1] {
-            DataType::String(s) => s.trim().to_string(),
+            Data::String(s) => s.trim().to_string(),
             _ => continue,
         };
 
         let category = match &row[2] {
-            DataType::String(s) => s.trim().to_string(),
+            Data::String(s) => s.trim().to_string(),
             _ => "Umum".to_string(),
         };
 
         let base_unit = match &row[3] {
-            DataType::String(s) => s.trim().to_string(),
+            Data::String(s) => s.trim().to_string(),
             _ => "Pcs".to_string(),
         };
 
         let min_stock = match &row[4] {
-            DataType::Int(n) => *n as i32,
-            DataType::Float(f) => *f as i32,
+            Data::Int(n) => *n as i32,
+            Data::Float(f) => *f as i32,
             _ => 0,
         };
 
         let buy_price = match &row[5] {
-            DataType::Float(f) => *f,
-            DataType::Int(n) => *n as f64,
+            Data::Float(f) => *f,
+            Data::Int(n) => *n as f64,
             _ => 0.0,
         };
 

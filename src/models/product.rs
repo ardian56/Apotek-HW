@@ -45,11 +45,9 @@ pub enum ExpiryStatus {
 impl ProductBatch {
     pub fn check_expiry_status(&self, today: &str) -> ExpiryStatus {
         if let Some(exp) = &self.expired_date {
-            if exp <= today {
+            if exp.as_str() <= today {
                 return ExpiryStatus::Expired;
             }
-            // Simple check approx <= 30 days
-            // Real logic can use chrono NaiveDate
         }
         ExpiryStatus::Normal
     }

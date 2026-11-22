@@ -7,10 +7,10 @@ mod services;
 
 use db::{create_pool, DbConfig};
 use gui::theme::AppTheme;
-use gui::views::{KasirView, LoginView};
+use gui::views::LoginView;
 use fltk::button::{Button, RoundButton};
 use fltk::dialog;
-use fltk::enums::{Align, Color, Event, Font, FrameType, Key};
+use fltk::enums::{Align, Color, Font, FrameType};
 use fltk::frame::Frame;
 use fltk::prelude::*;
 use fltk::window::Window;
@@ -35,11 +35,11 @@ pub struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            role: "client".to_string(),
+            role: "server".to_string(),
             db_host: "127.0.0.1".to_string(),
             db_port: 3306,
-            db_user: "root".to_string(),
-            db_pass: "root".to_string(),
+            db_user: "apotek".to_string(),
+            db_pass: "apotek123".to_string(),
             db_name: "apotek_db".to_string(),
         }
     }
@@ -144,6 +144,16 @@ fn main() {
     let app = fltk::app::App::default();
     AppTheme::apply();
 
+    // Mode Preview Cepat (Tanpa butuh database MariaDB jalan)
+    let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == "--preview") {
+        println!("[PREVIEW MODE] Membuka App Shell Apotek (Modern iB Clone)...");
+        let mut shell = gui::views::AppShell::new(None);
+        shell.win.show();
+        app.run().unwrap();
+        return;
+    }
+
     let mut app_config = load_or_init_config();
     let is_server_mode = app_config.role.to_lowercase() == "server";
 
@@ -218,40 +228,9 @@ fn main() {
                 println!("Login Berhasil! User: {} ({})", user.full_name, user.role);
                 login_win_clone.hide();
 
-                // Buka Layar Kasir Utama
-                let mut kasir_view = KasirView::new();
-                kasir_view.win.show();
-
-                // Shortcut Global Keyboard Handler (F1 - F7)
-                let mut inp_bc = kasir_view.input_barcode.clone();
-                let mut inp_byr = kasir_view.input_bayar.clone();
-                let btn_save = kasir_view.btn_simpan.clone();
-                let btn_print = kasir_view.btn_cetak.clone();
-                let btn_new = kasir_view.btn_baru.clone();
-
-                kasir_view.win.handle(move |_w, ev| match ev {
-                    Event::KeyDown => {
-                        let key = fltk::app::event_key();
-                        if key == Key::from_char('1') && fltk::app::event_key_down(Key::F1) || key == Key::F1 {
-                            inp_bc.take_focus().unwrap_or(());
-                            return true;
-                        } else if key == Key::F2 {
-                            inp_byr.take_focus().unwrap_or(());
-                            return true;
-                        } else if key == Key::F3 {
-                            btn_save.do_callback();
-                            return true;
-                        } else if key == Key::F4 {
-                            btn_print.do_callback();
-                            return true;
-                        } else if key == Key::F5 {
-                            btn_new.do_callback();
-                            return true;
-                        }
-                        false
-                    }
-                    _ => false,
-                });
+                // Buka AppShell Utama dengan Database Pool aktif
+                let mut shell = gui::views::AppShell::new(Some(pool_clone.clone()));
+                shell.win.show();
             }
             Ok(None) => {
                 lbl_status_clone.set_label("Username atau Password salah!");
