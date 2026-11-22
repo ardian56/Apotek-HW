@@ -1,0 +1,30 @@
+[package]
+name = "kasir_apotek"
+version = "0.1.0"
+edition = "2021"
+authors = ["Apotek Team"]
+description = "Aplikasi Desktop POS & Manajemen Inventori Apotek (Ringan, Modern, Low-RAM)"
+
+[dependencies]
+fltk = { version = "1.4", features = ["fltk-bundled"] }
+mysql = "24.0"
+chrono = { version = "0.4", features = ["serde"] }
+calamine = "0.24"
+rust_xlsxwriter = "0.64"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+barcoders = "1.1"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.52", features = [
+    "Win32_Graphics_Printing",
+    "Win32_Foundation",
+    "Win32_System_SystemServices",
+] }
+
+[profile.release]
+opt-level = "z"       # Optimasi ukuran binary sekecil mungkin
+lto = true            # Link-time optimization untuk efisiensi RAM/CPU
+codegen-units = 1     # Reduksi ukuran binary
+panic = "abort"       # Hilangkan overhead unwinding
+strip = true          # Hapus debug symbols
