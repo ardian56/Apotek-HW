@@ -6,8 +6,9 @@ use super::{
 use crate::{db::operations::ReportKind as R, gui::theme::AppTheme as T, models::User};
 use fltk::{
     button::Button,
-    enums::{Color, Event, FrameType, Key},
+    enums::{Color, FrameType, Shortcut},
     group::Group,
+    menu::{MenuButton, MenuFlag},
     prelude::*,
     window::Window,
 };
@@ -17,60 +18,99 @@ use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 pub struct AppShell {
     pub win: Window,
 }
+type Views = Rc<RefCell<BTreeMap<&'static str, Window>>>;
 
-fn page(name: &str, pool: Option<Pool>, user: User) -> Window {
-    match name {
-        "Ringkasan" => DashboardView::new(pool).win,
-        "Penjualan" => {
-            ReportsView::new(
-                pool,
-                user,
-                vec![R::Sales, R::Receivables, R::Payments, R::Returns],
-            )
-            .win
-        }
-        "Pembelian" => {
-            let mut view = PembelianView::new(pool.clone());
-            transactions::bind_purchase(&mut view, pool, user);
-            view.win
-        }
-        "Daftar pembelian" => {
-            ReportsView::new(
-                pool,
-                user,
-                vec![R::Purchases, R::Debts, R::Payments, R::Returns],
-            )
-            .win
-        }
-        "Hutang / piutang" => {
-            ReportsView::new(pool, user, vec![R::Debts, R::Receivables, R::Payments]).win
-        }
-        "Obat" => MasterObatView::new(pool).win,
-        "Suplier" => MasterSimpleView::suplier(pool).win,
-        "Pelanggan" => MasterSimpleView::pelanggan(pool).win,
-        "Dokter" => MasterSimpleView::dokter(pool).win,
-        "Operator" => MasterSimpleView::karyawan(pool).win,
-        "Stok opname" => StokOpnameView::new(pool).win,
-        "Kartu stok" => ReportsView::new(pool, user, vec![R::StockCards, R::Stock]).win,
-        "Laporan" => {
-            ReportsView::new(
-                pool,
-                user,
-                vec![
-                    R::Daily,
-                    R::Sales,
-                    R::Purchases,
-                    R::TopProducts,
-                    R::TopCustomers,
-                    R::Stock,
-                    R::StockCards,
-                    R::Payments,
-                    R::Returns,
-                ],
-            )
-            .win
-        }
-        _ => SettingsView::new(pool, user).win,
+fn open_page(name: &'static str, parent: Window, cache: Views, pool: Option<Pool>, user: User) {
+    for w in cache.borrow_mut().values_mut() {
+        w.hide();
+    }
+    if !cache.borrow().contains_key(name) {
+        parent.begin();
+        let win = match name {
+            "Ringkasan" => DashboardView::new(pool.clone()).win,
+            "Penjualan baru" => {
+                let mut view = KasirView::new();
+                transactions::bind_cashier(&mut view, pool.clone(), user.clone());
+                let p = parent.clone();
+                let c = cache.clone();
+                let db = pool.clone();
+                let u = user.clone();
+                view.btn_back.set_callback(move |_| {
+                    open_page("Penjualan", p.clone(), c.clone(), db.clone(), u.clone())
+                });
+                view.win
+            }
+            "Pembelian baru" => {
+                let mut view = PembelianView::new(pool.clone());
+                transactions::bind_purchase(&mut view, pool.clone(), user.clone());
+                let p = parent.clone();
+                let c = cache.clone();
+                let db = pool.clone();
+                let u = user.clone();
+                view.btn_back.set_callback(move |_| {
+                    open_page("Pembelian", p.clone(), c.clone(), db.clone(), u.clone())
+                });
+                view.win
+            }
+            "Penjualan" | "Pembelian" => {
+                let kind = if name == "Penjualan" {
+                    R::Sales
+                } else {
+                    R::Purchases
+                };
+                let mut view = ReportsView::new(pool.clone(), user.clone(), vec![kind]);
+                let target = if name == "Penjualan" {
+                    "Penjualan baru"
+                } else {
+                    "Pembelian baru"
+                };
+                let p = parent.clone();
+                let c = cache.clone();
+                let db = pool.clone();
+                let u = user.clone();
+                view.add.set_callback(move |_| {
+                    open_page(target, p.clone(), c.clone(), db.clone(), u.clone())
+                });
+                view.win
+            }
+            "Hutang" => ReportsView::new(pool.clone(), user.clone(), vec![R::Debts]).win,
+            "Piutang" => ReportsView::new(pool.clone(), user.clone(), vec![R::Receivables]).win,
+            "Pembayaran" => ReportsView::new(pool.clone(), user.clone(), vec![R::Payments]).win,
+            "Retur" => ReportsView::new(pool.clone(), user.clone(), vec![R::Returns]).win,
+            "Obat" => MasterObatView::new(pool.clone()).win,
+            "Suplier" => MasterSimpleView::suplier(pool.clone()).win,
+            "Pelanggan" => MasterSimpleView::pelanggan(pool.clone()).win,
+            "Dokter" => MasterSimpleView::dokter(pool.clone()).win,
+            "Operator" => MasterSimpleView::karyawan(pool.clone()).win,
+            "Stok opname" => StokOpnameView::new(pool.clone()).win,
+            "Kartu stok" => {
+                ReportsView::new(pool.clone(), user.clone(), vec![R::StockCards, R::Stock]).win
+            }
+            "Laporan" => {
+                ReportsView::new(
+                    pool.clone(),
+                    user.clone(),
+                    vec![
+                        R::Daily,
+                        R::Sales,
+                        R::Purchases,
+                        R::TopProducts,
+                        R::TopCustomers,
+                        R::Stock,
+                        R::StockCards,
+                        R::Payments,
+                        R::Returns,
+                    ],
+                )
+                .win
+            }
+            _ => SettingsView::new(pool.clone(), user.clone()).win,
+        };
+        parent.end();
+        cache.borrow_mut().insert(name, win);
+    }
+    if let Some(w) = cache.borrow_mut().get_mut(name) {
+        w.show();
     }
 }
 
@@ -80,13 +120,14 @@ impl AppShell {
             pool,
             User {
                 id: 0,
-                username: "preview".into(),
-                full_name: "Pratinjau".into(),
+                username: "contoh".into(),
+                full_name: "Mode contoh".into(),
                 role: "ADMIN".into(),
             },
+            fltk::app::quit,
         )
     }
-    pub fn for_user(pool: Option<Pool>, user: User) -> Self {
+    pub fn for_user(pool: Option<Pool>, user: User, mut on_logout: impl FnMut() + 'static) -> Self {
         let mut win = Window::default()
             .with_size(1200, 720)
             .with_label("Apotek POS");
@@ -94,9 +135,13 @@ impl AppShell {
         let mut header = Group::new(0, 0, 1200, 50, None);
         header.set_frame(FrameType::FlatBox);
         header.set_color(Color::White);
-        let mut brand = text(24, 10, 140, 30, "+ APOTEK POS", 16, true);
+        let mut brand = text(28, 10, 168, 30, "+  Apotek POS", 17, true);
         brand.set_label_color(T::PRIMARY);
-        let mut nav = Vec::new();
+        if pool.is_none() {
+            let mut mode = text(180, 10, 48, 30, "Contoh", 11, false);
+            mode.set_label_color(T::TEXT_MUTED);
+        }
+        let mut nav = Vec::<Button>::new();
         for (i, label) in [
             "Ringkasan",
             "Transaksi",
@@ -107,30 +152,52 @@ impl AppShell {
         .iter()
         .enumerate()
         {
-            nav.push(button(182 + i as i32 * 124, 8, 116, label, false));
+            let mut b = button(232 + i as i32 * 130, 8, 122, label, false);
+            b.set_color(Color::White);
+            nav.push(b);
         }
-        text(806, 10, 176, 30, &user.full_name, 12, false);
-        let mut cashier = button(998, 8, 178, "Buka kasir [F1]", true);
+        let mut profile = MenuButton::new(1072, 8, 100, 34, "Akun");
+        profile.set_frame(FrameType::BorderBox);
+        profile.set_color(Color::White);
+        profile.set_label_color(T::TEXT_BODY);
+        profile.set_label_size(13);
+        profile.set_selection_color(T::PRIMARY_SOFT);
+        profile.add(
+            &user.full_name.replace('/', " ").replace('|', " "),
+            Shortcut::None,
+            MenuFlag::Inactive,
+            |_| {},
+        );
+        profile.add(
+            &format!("{} · {}", user.username, user.role).replace('/', " "),
+            Shortcut::None,
+            MenuFlag::Inactive | MenuFlag::MenuDivider,
+            |_| {},
+        );
         header.end();
         let mut ribbon = Group::new(0, 50, 1200, 58, None);
         ribbon.set_frame(FrameType::FlatBox);
-        ribbon.set_color(T::BG_APP);
-        let mut pills = Vec::<Button>::new();
+        ribbon.set_color(Color::White);
+        let mut tabs = Vec::<Button>::new();
         for i in 0..8 {
-            pills.push(button(24 + i * 144, 62, 136, "", false));
+            let mut b = button(28 + i * 142, 62, 134, "", false);
+            b.set_color(Color::White);
+            tabs.push(b);
         }
         ribbon.end();
         let mut line = fltk::frame::Frame::new(0, 107, 1200, 1, None);
         line.set_frame(FrameType::FlatBox);
         line.set_color(T::BORDER);
         win.end();
-        let categories: Vec<Vec<&'static str>> = vec![
+        let groups = vec![
             vec!["Ringkasan"],
             vec![
                 "Penjualan",
                 "Pembelian",
-                "Daftar pembelian",
-                "Hutang / piutang",
+                "Hutang",
+                "Piutang",
+                "Pembayaran",
+                "Retur",
             ],
             vec![
                 "Obat",
@@ -144,58 +211,44 @@ impl AppShell {
             vec!["Laporan"],
             vec!["Pengaturan"],
         ];
-        let cache = Rc::new(RefCell::new(BTreeMap::<String, Window>::new()));
-        let select = {
+        let cache = Rc::new(RefCell::new(BTreeMap::<&'static str, Window>::new()));
+        let change = {
+            let groups = groups.clone();
+            let mut tabs = tabs.clone();
+            let mut nav = nav.clone();
+            let parent = win.clone();
             let cache = cache.clone();
             let pool = pool.clone();
             let user = user.clone();
-            let mut parent = win.clone();
-            move |name: &str| {
-                for w in cache.borrow_mut().values_mut() {
-                    w.hide();
-                }
-                if !cache.borrow().contains_key(name) {
-                    parent.begin();
-                    let w = page(name, pool.clone(), user.clone());
-                    parent.end();
-                    cache.borrow_mut().insert(name.into(), w);
-                }
-                if let Some(w) = cache.borrow_mut().get_mut(name) {
-                    w.show();
-                }
-            }
-        };
-        let change_category = {
-            let categories = categories.clone();
-            let mut pills = pills.clone();
-            let mut nav = nav.clone();
-            let select = select.clone();
-            let user = user.clone();
             move |index: usize| {
                 for (i, b) in nav.iter_mut().enumerate() {
-                    b.set_color(if i == index { T::PRIMARY } else { T::BG_APP });
-                    b.set_label_color(if i == index {
-                        Color::White
+                    b.set_color(if i == index {
+                        T::PRIMARY_SOFT
                     } else {
-                        T::TEXT_BODY
+                        Color::White
                     });
+                    b.set_label_color(if i == index { T::PRIMARY } else { T::TEXT_BODY });
                     b.redraw();
                 }
-                let all_pills = pills.clone();
-                for (i, b) in pills.iter_mut().enumerate() {
-                    if let Some(name) = categories[index].get(i) {
+                let all = tabs.clone();
+                for (i, b) in tabs.iter_mut().enumerate() {
+                    if let Some(name) = groups[index].get(i) {
+                        let name = *name;
                         b.set_label(name);
-                        b.set_color(if i == 0 { T::PRIMARY } else { T::TABLE_HEADER });
-                        b.set_label_color(if i == 0 { Color::White } else { T::TEXT_BODY });
+                        b.set_color(if i == 0 {
+                            T::PRIMARY_SOFT
+                        } else {
+                            Color::White
+                        });
+                        b.set_label_color(if i == 0 { T::PRIMARY } else { T::TEXT_BODY });
                         b.show();
                         let forbidden = (!user.is_admin()
-                            && matches!(*name, "Operator" | "Pengaturan"))
+                            && matches!(name, "Operator" | "Pengaturan"))
                             || (!user.can_access_reports()
                                 && matches!(
-                                    *name,
+                                    name,
                                     "Pembelian"
-                                        | "Daftar pembelian"
-                                        | "Hutang / piutang"
+                                        | "Hutang"
                                         | "Stok opname"
                                         | "Kartu stok"
                                         | "Laporan"
@@ -205,41 +258,40 @@ impl AppShell {
                         } else {
                             b.activate();
                         }
-                        let select = select.clone();
-                        let mut siblings = all_pills.clone();
-                        let name = *name;
+                        let p = parent.clone();
+                        let c = cache.clone();
+                        let db = pool.clone();
+                        let u = user.clone();
+                        let mut siblings = all.clone();
                         b.set_callback(move |_| {
                             for (j, b) in siblings.iter_mut().enumerate() {
-                                b.set_color(if i == j { T::PRIMARY } else { T::TABLE_HEADER });
-                                b.set_label_color(if i == j { Color::White } else { T::TEXT_BODY });
+                                b.set_color(if i == j {
+                                    T::PRIMARY_SOFT
+                                } else {
+                                    Color::White
+                                });
+                                b.set_label_color(if i == j { T::PRIMARY } else { T::TEXT_BODY });
                                 b.redraw();
                             }
-                            select(name);
+                            open_page(name, p.clone(), c.clone(), db.clone(), u.clone());
                         });
                     } else {
                         b.hide();
                     }
                 }
-                let first = categories[index].iter().find(|name| {
-                    !(!user.is_admin() && matches!(**name, "Operator" | "Pengaturan"))
-                        && !(!user.can_access_reports()
-                            && matches!(
-                                **name,
-                                "Pembelian"
-                                    | "Daftar pembelian"
-                                    | "Hutang / piutang"
-                                    | "Stok opname"
-                                    | "Kartu stok"
-                                    | "Laporan"
-                            ))
-                });
-                if let Some(name) = first {
-                    select(name);
+                if let Some(name) = groups[index].first() {
+                    open_page(
+                        name,
+                        parent.clone(),
+                        cache.clone(),
+                        pool.clone(),
+                        user.clone(),
+                    );
                 }
             }
         };
         for (i, b) in nav.iter_mut().enumerate() {
-            let mut change = change_category.clone();
+            let mut change = change.clone();
             b.set_callback(move |_| change(i));
         }
         if !user.can_access_reports() {
@@ -248,31 +300,15 @@ impl AppShell {
         if !user.is_admin() {
             nav[4].deactivate();
         }
-        let cashier_window = Rc::new(RefCell::new(None::<Window>));
-        let active_cashier = cashier_window.clone();
-        let p = pool.clone();
-        let u = user.clone();
-        cashier.set_callback(move |_| {
-            if let Some(w) = active_cashier.borrow_mut().as_mut() {
-                w.show();
-                return;
-            }
-            let mut view = KasirView::new();
-            transactions::bind_cashier(&mut view, p.clone(), u.clone());
-            view.win.show();
-            *active_cashier.borrow_mut() = Some(view.win);
+        let mut parent = win.clone();
+        let c = cache.clone();
+        profile.add("Keluar akun", Shortcut::None, MenuFlag::Normal, move |_| {
+            parent.hide();
+            c.borrow_mut().clear();
+            on_logout();
+            fltk::app::delete_widget(parent.clone());
         });
-        let mut open = cashier.clone();
-        win.handle(move |_, event| {
-            if matches!(event, Event::KeyDown | Event::Shortcut)
-                && fltk::app::event_key() == Key::F1
-            {
-                open.do_callback();
-                return true;
-            }
-            false
-        });
-        let mut change = change_category;
+        let mut change = change;
         change(0);
         Self { win }
     }

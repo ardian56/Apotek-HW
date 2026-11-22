@@ -1,8 +1,4 @@
-use super::{
-    components::*,
-    kasir::{KasirView, MockCartRow},
-    pembelian::{PembelianItemRow, PembelianView},
-};
+use super::{components::*, kasir::KasirView, pembelian::PembelianView};
 use crate::{
     db::{
         self,
@@ -12,8 +8,7 @@ use crate::{
     models::{Product, Sale, SaleItem, User},
 };
 use fltk::{
-    enums::{CallbackTrigger, Event, FrameType, Key},
-    frame::Frame,
+    enums::{CallbackTrigger, Event, Key},
     menu::Choice,
     prelude::*,
     window::Window,
@@ -22,13 +17,13 @@ use mysql::Pool;
 use std::{cell::RefCell, rc::Rc};
 
 fn item_dialog(
-    pool: Pool,
+    pool: Option<Pool>,
     purchase: bool,
     query: &str,
-    mut add: impl FnMut(PurchaseLine) -> Result<(), String> + 'static,
+    mut add: impl FnMut(Product, PurchaseLine) -> Result<(), String> + 'static,
 ) {
     let mut win = Window::default()
-        .with_size(700, 492)
+        .with_size(700, if purchase { 492 } else { 430 })
         .with_label(if purchase {
             "Tambah barang pembelian"
         } else {
@@ -40,10 +35,10 @@ fn item_dialog(
     let mut find = button(520, 44, 156, "Cari", true);
     text(24, 100, 640, 20, "Obat", 12, false);
     let mut product = Choice::new(24, 126, 652, 34, None);
-    product.set_frame(FrameType::BorderBox);
+    style_choice(&mut product);
     text(24, 184, 180, 18, "Satuan", 12, false);
     let mut unit = Choice::new(24, 208, 180, 34, None);
-    unit.set_frame(FrameType::BorderBox);
+    style_choice(&mut unit);
     let qty = input(224, 184, 100, "Jumlah", "1");
     let price = input(
         344,
@@ -57,26 +52,35 @@ fn item_dialog(
         "0",
     );
     let discount = input(534, 184, 142, "Diskon (%)", "0");
-    let batch = input(24, 268, 300, "Nomor batch", "");
-    let expiry = input(348, 268, 328, "Kedaluwarsa (YYYY-MM-DD)", "");
-    if !purchase {
-        let mut b = batch.clone();
-        b.hide();
-        let mut e = expiry.clone();
-        e.hide();
-    }
-    let mut status = text(24, 350, 652, 40, "", 12, false);
-    let mut save = button(24, 432, 200, "Tambah ke keranjang", true);
-    let mut cancel = button(240, 432, 120, "Batal", false);
+    let batch = purchase.then(|| input(24, 268, 300, "Nomor batch", ""));
+    let expiry = purchase.then(|| input(348, 268, 328, "Kedaluwarsa (YYYY-MM-DD)", ""));
+    let details = (!purchase).then(|| text(24, 270, 652, 44, "", 12, false));
+    let mut status = text(24, if purchase { 350 } else { 330 }, 652, 34, "", 12, false);
+    let button_y = if purchase { 432 } else { 374 };
+    let mut save = button(24, button_y, 200, "Tambah ke keranjang", true);
+    let mut cancel = button(240, button_y, 120, "Batal", false);
     let products = Rc::new(RefCell::new(Vec::<Product>::new()));
     let select = {
         let ps = products.clone();
         let p = product.clone();
         let mut u = unit.clone();
         let mut price = price.clone();
+        let mut details = details.clone();
         move || {
             u.clear();
+            price.set_value("0");
+            if let Some(details) = &mut details {
+                details.set_label("");
+            }
             if let Some(product) = ps.borrow().get(p.value().max(0) as usize) {
+                if let Some(details) = &mut details {
+                    details.set_label(&format!(
+                        "Stok layak jual: {} {}  •  ED terdekat: {}",
+                        product.sellable_stock_on(&chrono::Local::now().date_naive().to_string()),
+                        product.base_unit,
+                        product.earliest_expiry().unwrap_or("—")
+                    ));
+                }
                 for unit in &product.units {
                     u.add_choice(&unit.unit_name.replace('|', " "));
                 }
@@ -101,7 +105,7 @@ fn item_dialog(
         let s = search.clone();
         let mut st = status.clone();
         let mut select = select.clone();
-        move || match db::get_products(&pool, Some(&s.value())) {
+        move || match db::view_products(pool.as_ref(), Some(&s.value())) {
             Ok(data) => {
                 p.clear();
                 for product in &data {
@@ -116,7 +120,12 @@ fn item_dialog(
                 select();
                 st.set_label("Pilih obat dan satuan. Pencarian menampilkan maksimum 200 obat.");
             }
-            Err(e) => st.set_label(&format!("Pencarian gagal: {e}")),
+            Err(e) => {
+                p.clear();
+                ps.borrow_mut().clear();
+                select();
+                st.set_label(&format!("Pencarian gagal: {e}"));
+            }
         }
     };
     let mut l = load.clone();
@@ -143,7 +152,7 @@ fn item_dialog(
         }
     });
     let mut w = win.clone();
-    cancel.set_callback(move |_| w.hide());
+    cancel.set_callback(move |_| close_modal(&mut w));
     let mut w = win.clone();
     save.set_callback(move |_| {
         let result = (|| -> Result<(), String> {
@@ -165,43 +174,22 @@ fn item_dialog(
                 price: operations::money(&price.value())?,
                 discount: operations::money(&discount.value())?,
                 batch: if purchase {
-                    batch.value()
+                    batch.as_ref().map(|i| i.value()).unwrap_or_default()
                 } else {
                     "PENJUALAN".into()
                 },
-                expiry: if purchase && !expiry.value().trim().is_empty() {
-                    Some(operations::date(&expiry.value())?)
-                } else {
-                    None
-                },
+                expiry: expiry
+                    .as_ref()
+                    .map(|i| i.value())
+                    .filter(|v| !v.trim().is_empty())
+                    .map(|v| operations::date(&v))
+                    .transpose()?,
             };
             line.validate()?;
-            if !purchase {
-                let today = chrono::Local::now().date_naive().to_string();
-                let available = p
-                    .batches
-                    .iter()
-                    .filter(|b| {
-                        b.expired_date
-                            .as_deref()
-                            .map(|d| d > today.as_str())
-                            .unwrap_or(true)
-                    })
-                    .map(|b| b.stock as i64)
-                    .sum::<i64>();
-                if (line.qty as i64 * line.conversion as i64) > available {
-                    return Err("Stok layak jual tidak cukup".into());
-                }
-                if line.price * (1.0 - line.discount / 100.0) / (line.conversion as f64)
-                    < p.buy_price
-                {
-                    return Err("Harga setelah diskon di bawah modal. Periksa harga jual.".into());
-                }
-            }
-            add(line)
+            add(p.clone(), line)
         })();
         match result {
-            Ok(()) => w.hide(),
+            Ok(()) => close_modal(&mut w),
             Err(e) => status.set_label(&e),
         }
     });
@@ -209,6 +197,7 @@ fn item_dialog(
     l();
     win.end();
     win.make_modal(true);
+    win.set_callback(close_modal);
     win.show();
 }
 
@@ -253,19 +242,20 @@ fn choose_pending(
     );
     let mut restore = button(24, 218, 200, "Buka transaksi", true);
     if data.is_empty() {
-        restore.deactivate();
+        disable(&mut restore);
     }
     let mut w = win.clone();
     restore.set_callback(move |_| {
         if let Some((id, payload)) = data.get(choice.value().max(0) as usize) {
             match open(*id, payload.clone()) {
-                Ok(()) => w.hide(),
+                Ok(()) => close_modal(&mut w),
                 Err(e) => status.set_label(&e),
             }
         }
     });
     win.end();
     win.make_modal(true);
+    win.set_callback(close_modal);
     win.show();
     Ok(())
 }
@@ -275,133 +265,170 @@ pub fn bind_cashier(view: &mut KasirView, pool: Option<Pool>, user: User) {
     let invoice = Rc::new(RefCell::new(String::new()));
     let last = Rc::new(RefCell::new(None::<Sale>));
     let pending_id = Rc::new(RefCell::new(None::<i32>));
-    view.rows_data.borrow_mut().clear();
-    view.cart_table.set_rows(0);
+    view.grid.set(vec![]);
     view.input_barcode.set_value("");
-    view.input_qty.set_value("1");
     view.lbl_grand_total.set_label("Rp 0");
     view.input_bayar.set_value("0");
     view.lbl_kembali.set_label("Rp 0");
-    view.lbl_network_status.set_label(if pool.is_some() {
-        "Database terhubung"
+    view.status.set_label(if pool.is_some() {
+        ""
     } else {
-        "Pratinjau • Tanpa database"
+        "Mode contoh. Penyimpanan memerlukan koneksi database."
     });
-    view.lbl_operator
-        .set_label(&format!("Operator: {}", user.full_name));
-    view.lbl_warning_rugi.resize(24, 658, 970, 20);
-    view.lbl_warning_rugi.set_label("");
-    view.choice_unit.deactivate();
-    view.input_qty.deactivate();
-    view.win.begin();
-    let mut payment = Choice::new(350, 500, 210, 32, None);
-    payment.add_choice("Tunai|Kredit");
-    payment.set_value(0);
-    let mut customer = Choice::new(350, 544, 230, 30, None);
+    let mut payment = view.payment.clone();
+    let mut customer = view.customer.clone();
     customer.add_choice("Pelanggan umum");
     customer.set_value(0);
-    let customers = pool
-        .as_ref()
-        .map(db::get_customers)
-        .transpose()
-        .ok()
-        .flatten()
-        .unwrap_or_default();
+    let customers = if let Some(p) = &pool {
+        db::get_customers(p).unwrap_or_default()
+    } else {
+        db::demo::master_rows("customers")
+            .into_iter()
+            .map(|r| {
+                (
+                    r[0].parse().unwrap(),
+                    r[1].clone(),
+                    r[2].clone(),
+                    r[3].clone(),
+                )
+            })
+            .collect()
+    };
     for (_, name, _, _) in &customers {
         customer.add_choice(&name.replace('|', " ").replace('/', " "));
     }
-    let mut due = fltk::input::Input::new(350, 578, 230, 28, None);
+    let mut due = view.due.clone();
     due.set_value(&(chrono::Local::now().date_naive() + chrono::Duration::days(30)).to_string());
-    due.set_tooltip("Jatuh tempo kredit (YYYY-MM-DD)");
-    due.hide();
     let mut credit_date = due.clone();
+    let mut credit_label = view.due_label.clone();
     payment.set_callback(move |p| {
         if p.value() == 1 {
             credit_date.show();
+            credit_label.show();
         } else {
             credit_date.hide();
+            credit_label.hide();
         }
     });
-    let mut remove = button(790, 616, 196, "Hapus barang terpilih", false);
-    view.win.end();
+    let mut remove = view.btn_remove.clone();
     let refresh = {
         let data = items.clone();
-        let rows = view.rows_data.clone();
-        let mut table = view.cart_table.clone();
+        let mut grid = view.grid.clone();
         let mut total = view.lbl_grand_total.clone();
         let paid = view.input_bayar.clone();
         let mut change = view.lbl_kembali.clone();
         move || {
-            *rows.borrow_mut() = data
-                .borrow()
-                .iter()
-                .enumerate()
-                .map(|(i, line)| MockCartRow {
-                    no: i as i32 + 1,
-                    barcode: line.product_code.clone(),
-                    name: line.product_name.clone(),
-                    unit: line.unit_name.clone(),
-                    qty: line.qty,
-                    price: line.sell_price,
-                    subtotal: line.subtotal,
-                })
-                .collect();
-            table.set_rows(data.borrow().len() as i32);
-            table.redraw();
+            grid.set(
+                data.borrow()
+                    .iter()
+                    .map(|line| {
+                        vec![
+                            line.product_code.clone(),
+                            line.product_name.clone(),
+                            line.qty.to_string(),
+                            line.unit_name.clone(),
+                            line.sell_price.to_string(),
+                            line.discount.to_string(),
+                            line.subtotal.to_string(),
+                        ]
+                    })
+                    .collect(),
+            );
             let sum = data
                 .borrow()
                 .iter()
                 .map(|i| i.subtotal)
                 .sum::<f64>()
                 .max(0.0);
-            total.set_label(&format!("Rp {sum:.2}"));
-            change.set_label(&format!(
-                "Rp {:.2}",
-                (operations::money(&paid.value()).unwrap_or(0.0) - sum).max(0.0)
+            total.set_label(&rupiah(sum));
+            change.set_label(&rupiah(
+                (operations::money(&paid.value()).unwrap_or(0.0) - sum).max(0.0),
             ));
         }
     };
     view.input_bayar.set_trigger(CallbackTrigger::Changed);
     let mut r = refresh.clone();
     view.input_bayar.set_callback(move |_| r());
-    let data = items.clone();
+    let append = {
+        let data = items.clone();
+        let mut r = refresh.clone();
+        let mut barcode = view.input_barcode.clone();
+        let mut st = view.status.clone();
+        move |product: Product, line: PurchaseLine| -> Result<(), String> {
+            crate::services::cart::add_sale_line(
+                &mut data.borrow_mut(),
+                &product,
+                &line,
+                &chrono::Local::now().date_naive().to_string(),
+            )?;
+            r();
+            st.set_label(&format!(
+                "{} ditambahkan. Scan berikutnya atau pilih Cari obat manual.",
+                product.name
+            ));
+            barcode.set_value("");
+            let mut focus = barcode.clone();
+            fltk::app::add_timeout3(0.0, move |_| {
+                let _ = focus.take_focus();
+            });
+            Ok(())
+        }
+    };
     let p = pool.clone();
     let query = view.input_barcode.clone();
-    let mut st = view.lbl_warning_rugi.clone();
-    let r = refresh.clone();
+    let add = append.clone();
     view.btn_add_item.set_callback(move |_| {
-        let Some(p) = &p else {
-            st.set_label("Hubungkan database terlebih dahulu");
-            return;
-        };
-        let data = data.clone();
-        let mut r = r.clone();
-        item_dialog(p.clone(), false, &query.value(), move |line| {
-            let subtotal = line.total();
-            data.borrow_mut().push(SaleItem {
-                id: 0,
-                sale_id: 0,
-                product_id: line.product_id,
-                product_code: line.code,
-                product_name: line.name,
-                unit_name: line.unit,
-                qty: line.qty,
-                conversion_qty: line.conversion,
-                qty_in_base: line.qty * line.conversion,
-                sell_price: line.price,
-                discount: line.price * line.qty as f64 * line.discount / 100.0,
-                subtotal,
-                batch_allocations: vec![],
-            });
-            r();
-            Ok(())
-        });
+        item_dialog(p.clone(), false, &query.value(), add.clone());
     });
-    let mut add = view.btn_add_item.clone();
+    let p = pool.clone();
+    let mut add = append;
+    let mut st = view.status.clone();
     view.input_barcode.set_trigger(CallbackTrigger::EnterKey);
-    view.input_barcode.set_callback(move |_| add.do_callback());
+    view.input_barcode.set_callback(move |query| {
+        let value = query.value().trim().to_string();
+        if value.is_empty() {
+            return;
+        }
+        let result = (|| -> Result<(), String> {
+            let products = db::view_products(p.as_ref(), Some(&value))?;
+            if products.is_empty() {
+                return Err("Obat atau barcode tidak ditemukan".into());
+            }
+            if let Some(product) = products
+                .into_iter()
+                .find(|product| product.code.eq_ignore_ascii_case(&value))
+            {
+                let unit = product
+                    .units
+                    .iter()
+                    .find(|u| u.conversion_qty == 1)
+                    .ok_or("Satuan dasar obat belum memiliki harga jual")?;
+                let line = PurchaseLine {
+                    product_id: product.id,
+                    code: product.code.clone(),
+                    name: product.name.clone(),
+                    unit: unit.unit_name.clone(),
+                    conversion: unit.conversion_qty,
+                    qty: 1,
+                    price: unit.sell_price,
+                    discount: 0.0,
+                    batch: "PENJUALAN".into(),
+                    expiry: None,
+                };
+                add(product, line)?;
+            } else {
+                item_dialog(p.clone(), false, &value, add.clone());
+            }
+            Ok(())
+        })();
+        if let Err(e) = result {
+            st.set_label(&e);
+            query.set_value("");
+            let _ = query.take_focus();
+        }
+    });
     let data = items.clone();
-    let t = view.cart_table.clone();
+    let t = view.grid.table.clone();
     let mut r = refresh.clone();
     remove.set_callback(move |_| {
         let (row, _, _, _) = t.get_selection();
@@ -415,7 +442,7 @@ pub fn bind_cashier(view: &mut KasirView, pool: Option<Pool>, user: User) {
         let data = items.clone();
         let mut paid = view.input_bayar.clone();
         let mut r = refresh.clone();
-        let mut st = view.lbl_warning_rugi.clone();
+        let mut st = view.status.clone();
         let mut c = customer.clone();
         let mut pt = payment.clone();
         let pending = pending_id.clone();
@@ -509,7 +536,7 @@ pub fn bind_cashier(view: &mut KasirView, pool: Option<Pool>, user: User) {
     let saved = last.clone();
     let pending = pending_id.clone();
     let mut r = refresh.clone();
-    let mut st = view.lbl_warning_rugi.clone();
+    let mut st = view.status.clone();
     view.btn_simpan.set_callback(move |_| {
         let Some(p) = &p else {
             return;
@@ -537,7 +564,7 @@ pub fn bind_cashier(view: &mut KasirView, pool: Option<Pool>, user: User) {
         }
     });
     let p = pool.clone();
-    let mut st = view.lbl_warning_rugi.clone();
+    let mut st = view.status.clone();
     view.btn_pending.set_callback(move |_| {
         let Some(p) = &p else {
             return;
@@ -559,7 +586,7 @@ pub fn bind_cashier(view: &mut KasirView, pool: Option<Pool>, user: User) {
     let data = items.clone();
     let pending = pending_id.clone();
     let paid = view.input_bayar.clone();
-    let mut st = view.lbl_warning_rugi.clone();
+    let mut st = view.status.clone();
     let r = refresh.clone();
     view.btn_buka_pending.set_callback(move |_| {
         let Some(p) = &p else {
@@ -603,7 +630,7 @@ pub fn bind_cashier(view: &mut KasirView, pool: Option<Pool>, user: User) {
     });
     let p = pool.clone();
     let saved = last.clone();
-    let mut st = view.lbl_warning_rugi.clone();
+    let mut st = view.status.clone();
     view.btn_cetak.set_callback(move |_| {
         let Some(sale) = saved.borrow().clone() else {
             st.set_label("Simpan transaksi sebelum mencetak struk");
@@ -643,7 +670,7 @@ pub fn bind_cashier(view: &mut KasirView, pool: Option<Pool>, user: User) {
             &mut view.btn_buka_pending,
             &mut view.btn_cetak,
         ] {
-            b.deactivate();
+            disable(b);
         }
     }
     let mut barcode = view.input_barcode.clone();
@@ -655,8 +682,11 @@ pub fn bind_cashier(view: &mut KasirView, pool: Option<Pool>, user: User) {
         view.btn_pending.clone(),
         view.btn_buka_pending.clone(),
     ];
-    view.win.handle(move |_, event| {
-        if matches!(event, Event::KeyDown | Event::Shortcut) {
+    view.win.handle(move |window, event| {
+        if window.visible_r()
+            && fltk::app::modal().is_none()
+            && matches!(event, Event::KeyDown | Event::Shortcut)
+        {
             let key = fltk::app::event_key();
             if key == Key::F1 {
                 let _ = barcode.take_focus();
@@ -680,86 +710,85 @@ pub fn bind_cashier(view: &mut KasirView, pool: Option<Pool>, user: User) {
         }
         false
     });
+    if pool.is_none() {
+        *items.borrow_mut() = db::demo::sales()[0].items.clone();
+        view.input_bayar.set_value("50000");
+        view.customer.set_value(1);
+        let mut r = refresh;
+        r();
+        view.status
+            .set_label("Contoh penjualan. Penyimpanan dinonaktifkan pada mode contoh.");
+    }
 }
 
 pub fn bind_purchase(view: &mut PembelianView, pool: Option<Pool>, user: User) {
     let lines = Rc::new(RefCell::new(Vec::<PurchaseLine>::new()));
     let pending_id = Rc::new(RefCell::new(None::<i32>));
-    view.items.borrow_mut().clear();
-    view.table.set_rows(0);
+    view.grid.set(vec![]);
     view.input_faktur.set_value("");
     view.input_tempo
         .set_value(&(chrono::Local::now().date_naive() + chrono::Duration::days(30)).to_string());
-    view.input_tempo.resize(510, 38, 110, 30);
     view.input_tempo.set_tooltip("Jatuh tempo: YYYY-MM-DD");
     view.choice_suplier.clear();
     view.choice_suplier.add_choice("Pilih suplier");
     view.choice_suplier.set_value(0);
-    let suppliers = pool
-        .as_ref()
-        .map(db::get_suppliers)
-        .transpose()
-        .ok()
-        .flatten()
-        .unwrap_or_default();
+    let suppliers = if let Some(p) = &pool {
+        db::get_suppliers(p).unwrap_or_default()
+    } else {
+        db::demo::master_rows("suppliers")
+            .into_iter()
+            .map(|r| {
+                (
+                    r[0].parse().unwrap(),
+                    r[1].clone(),
+                    r[2].clone(),
+                    r[3].clone(),
+                )
+            })
+            .collect()
+    };
     for (_, name, _, _) in &suppliers {
         view.choice_suplier
             .add_choice(&name.replace('|', " ").replace('/', " "));
     }
-    view.win.begin();
-    let mut status = text(
-        36,
-        80,
-        1110,
-        26,
-        if pool.is_none() {
-            "Pratinjau • Hubungkan database untuk menyimpan pembelian"
-        } else {
-            "Isi faktur suplier dan tambahkan barang"
-        },
-        12,
-        false,
-    );
-    let mut remove = button(896, 486, 268, "Hapus barang terpilih", false);
-    let mut pending = button(896, 548, 130, "Pending", false);
-    let mut restore = button(1034, 548, 130, "Buka pending", false);
-    view.win.end();
+    let status = view.status.clone();
+    let mut remove = view.btn_remove.clone();
+    let mut pending = view.btn_pending.clone();
+    let mut restore = view.btn_restore.clone();
     let refresh = {
         let disc = view.input_discount.clone();
         let tax = view.input_tax.clone();
         let data = lines.clone();
-        let rows = view.items.clone();
-        let mut table = view.table.clone();
+        let mut grid = view.grid.clone();
         let mut sub = view.lbl_subtotal.clone();
         let mut total = view.lbl_grand_total.clone();
         move || {
-            *rows.borrow_mut() = data
-                .borrow()
-                .iter()
-                .enumerate()
-                .map(|(i, line)| PembelianItemRow {
-                    no: i as i32 + 1,
-                    barcode: line.code.clone(),
-                    nama: line.name.clone(),
-                    satuan: line.unit.clone(),
-                    harga_beli: line.price,
-                    qty: line.qty,
-                    diskon_persen: line.discount,
-                    total: line.total(),
-                })
-                .collect();
-            table.set_rows(data.borrow().len() as i32);
-            table.redraw();
+            grid.set(
+                data.borrow()
+                    .iter()
+                    .map(|line| {
+                        vec![
+                            line.code.clone(),
+                            line.name.clone(),
+                            line.qty.to_string(),
+                            line.unit.clone(),
+                            line.price.to_string(),
+                            line.discount.to_string(),
+                            line.total().to_string(),
+                        ]
+                    })
+                    .collect(),
+            );
             let sum = data
                 .borrow()
                 .iter()
                 .map(PurchaseLine::total)
                 .sum::<f64>()
                 .max(0.0);
-            sub.set_label(&format!("Rp {sum:.2}"));
+            sub.set_label(&rupiah(sum));
             let result = (sum - operations::money(&disc.value()).unwrap_or(0.0))
                 * (1.0 + operations::money(&tax.value()).unwrap_or(0.0) / 100.0);
-            total.set_label(&format!("Rp {result:.2}"));
+            total.set_label(&rupiah(result));
         }
     };
     let mut r = refresh.clone();
@@ -774,18 +803,16 @@ pub fn bind_purchase(view: &mut PembelianView, pool: Option<Pool>, user: User) {
     let data = lines.clone();
     let r = refresh.clone();
     view.btn_tambah_item.set_callback(move |_| {
-        if let Some(p) = &p {
-            let data = data.clone();
-            let mut r = r.clone();
-            item_dialog(p.clone(), true, "", move |line| {
-                data.borrow_mut().push(line);
-                r();
-                Ok(())
-            });
-        }
+        let data = data.clone();
+        let mut r = r.clone();
+        item_dialog(p.clone(), true, "", move |_, line| {
+            data.borrow_mut().push(line);
+            r();
+            Ok(())
+        });
     });
     let data = lines.clone();
-    let t = view.table.clone();
+    let t = view.grid.table.clone();
     let mut r = refresh.clone();
     remove.set_callback(move |_| {
         let (row, _, _, _) = t.get_selection();
@@ -957,12 +984,10 @@ pub fn bind_purchase(view: &mut PembelianView, pool: Option<Pool>, user: User) {
             st.set_label(&e);
         }
     });
-    view.btn_cetak.hide();
     if pool.is_none() {
-        view.btn_simpan.deactivate();
-        view.btn_tambah_item.deactivate();
-        pending.deactivate();
-        restore.deactivate();
+        disable(&mut view.btn_simpan);
+        disable(&mut pending);
+        disable(&mut restore);
     }
     let mut buttons = [
         view.btn_tambah_item.clone(),
@@ -971,8 +996,11 @@ pub fn bind_purchase(view: &mut PembelianView, pool: Option<Pool>, user: User) {
         pending.clone(),
         restore.clone(),
     ];
-    view.win.handle(move |_, event| {
-        if matches!(event, Event::KeyDown | Event::Shortcut) {
+    view.win.handle(move |window, event| {
+        if window.visible_r()
+            && fltk::app::modal().is_none()
+            && matches!(event, Event::KeyDown | Event::Shortcut)
+        {
             let key = fltk::app::event_key();
             for (i, k) in [Key::F1, Key::F3, Key::F5, Key::F6, Key::F7]
                 .iter()
@@ -988,4 +1016,14 @@ pub fn bind_purchase(view: &mut PembelianView, pool: Option<Pool>, user: User) {
         }
         false
     });
+    if pool.is_none() {
+        let p = db::demo::purchases().remove(0);
+        *lines.borrow_mut() = p.lines;
+        view.input_faktur.set_value(&p.invoice);
+        view.choice_suplier.set_value(1);
+        let mut r = refresh;
+        r();
+        view.status
+            .set_label("Contoh pembelian. Penyimpanan dinonaktifkan pada mode contoh.");
+    }
 }

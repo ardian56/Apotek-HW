@@ -198,8 +198,8 @@ pub fn save_purchase(pool: &Pool, purchase: &Purchase) -> Result<(), String> {
             tx.exec_drop("INSERT INTO product_batches (product_id,batch_no,expired_date,stock,buy_price) VALUES (:pid,:batch,:exp,:qty,:price)",
                 params! {"pid"=>line.product_id,"batch"=>&line.batch,"exp"=>&line.expiry,"qty"=>qty,"price"=>base_price})?;
             let batch = tx.last_insert_id().unwrap_or(0) as i32;
-            tx.exec_drop("INSERT INTO purchase_items (purchase_id,product_id,batch_no,expired_date,qty,conversion_qty,buy_price,subtotal,batch_id) VALUES (:id,:pid,:batch,:exp,:qty,:conv,:price,:total,:bid)",
-                params! {"id"=>id,"pid"=>line.product_id,"batch"=>&line.batch,"exp"=>&line.expiry,"qty"=>line.qty,"conv"=>line.conversion,"price"=>line.price,"total"=>line.total(),"bid"=>batch})?;
+            tx.exec_drop("INSERT INTO purchase_items (purchase_id,product_id,batch_no,expired_date,qty,conversion_qty,buy_price,subtotal,batch_id,unit_name) VALUES (:id,:pid,:batch,:exp,:qty,:conv,:price,:total,:bid,:unit)",
+                params! {"id"=>id,"pid"=>line.product_id,"batch"=>&line.batch,"exp"=>&line.expiry,"qty"=>line.qty,"conv"=>line.conversion,"price"=>line.price,"total"=>line.total(),"bid"=>batch,"unit"=>&line.unit})?;
             tx.exec_drop(
                 "UPDATE products SET buy_price=:price WHERE id=:pid",
                 params! {"price"=>base_price,"pid"=>line.product_id},
@@ -245,13 +245,22 @@ impl ReportKind {
     }
     pub fn headers(self) -> Vec<&'static str> {
         match self {
-            Self::Sales | Self::Purchases => vec![
+            Self::Sales => vec![
                 "ID",
                 "Faktur",
                 "Tanggal",
-                "Pelanggan / suplier",
+                "Pelanggan",
                 "Total (Rp)",
-                "Bayar (Rp)",
+                "Diterima (Rp)",
+                "Status",
+            ],
+            Self::Purchases => vec![
+                "ID",
+                "Faktur",
+                "Tanggal",
+                "Suplier",
+                "Total (Rp)",
+                "Dibayar (Rp)",
                 "Status",
             ],
             Self::Receivables | Self::Debts => vec![
@@ -347,6 +356,137 @@ pub fn report(
                 .collect()
         })
         .collect())
+}
+
+#[derive(Clone, Debug)]
+pub struct InvoiceDetails {
+    pub invoice: String,
+    pub date: String,
+    pub party: String,
+    pub payment: String,
+    pub total: f64,
+    pub received: f64,
+    pub change: f64,
+    pub returned: bool,
+    pub items: Vec<Vec<String>>,
+}
+
+pub fn invoice_details(pool: &Pool, sale: bool, id: i32) -> Result<InvoiceDetails, String> {
+    let mut conn = pool.get_conn().map_err(|e| e.to_string())?;
+    let header_sql = if sale {
+        "SELECT s.invoice_no,DATE_FORMAT(s.sale_date,'%d/%m/%Y %H:%i'),COALESCE(c.name,'Pelanggan umum'),s.payment_type,s.grand_total,s.paid_amount,s.change_amount,EXISTS(SELECT 1 FROM returns r WHERE r.ref_type='PENJUALAN' AND r.ref_id=s.id) FROM sales s LEFT JOIN customers c ON c.id=s.customer_id WHERE s.id=:id"
+    } else {
+        "SELECT p.invoice_no,DATE_FORMAT(p.purchase_date,'%d/%m/%Y'),s.name,p.payment_type,p.total_amount,p.paid_amount,CAST(0 AS DECIMAL(15,2)),EXISTS(SELECT 1 FROM returns r WHERE r.ref_type='PEMBELIAN' AND r.ref_id=p.id) FROM purchases p JOIN suppliers s ON s.id=p.supplier_id WHERE p.id=:id"
+    };
+    let row: Option<mysql::Row> = conn
+        .exec_first(header_sql, params! {"id"=>id})
+        .map_err(|e| e.to_string())?;
+    let header: Option<(String, String, String, String, f64, f64, f64, bool)> = row
+        .map(mysql::from_row_opt)
+        .transpose()
+        .map_err(|e| e.to_string())?;
+    let (invoice, date, party, payment, total, received, change, returned) =
+        header.ok_or("Faktur tidak ditemukan")?;
+    let items_sql = if sale {
+        "SELECT p.code,p.name,i.qty,i.unit_name,i.sell_price,i.discount,i.subtotal,CONCAT(i.qty_in_base,' ',p.base_unit),COALESCE((SELECT GROUP_CONCAT(b.batch_no ORDER BY b.id SEPARATOR ', ') FROM sale_item_batches a JOIN product_batches b ON b.id=a.batch_id WHERE a.sale_item_id=i.id),'—') FROM sale_items i JOIN products p ON p.id=i.product_id WHERE i.sale_id=:id ORDER BY i.id"
+    } else {
+        "SELECT p.code,p.name,i.qty,COALESCE(i.unit_name,IF(i.conversion_qty=1,p.base_unit,CONCAT('×',i.conversion_qty,' ',p.base_unit))),i.buy_price,i.qty*i.buy_price-i.subtotal,i.subtotal,CONCAT(i.qty*i.conversion_qty,' ',p.base_unit),COALESCE(i.batch_no,'—') FROM purchase_items i JOIN products p ON p.id=i.product_id WHERE i.purchase_id=:id ORDER BY i.id"
+    };
+    let rows: Vec<mysql::Row> = conn
+        .exec(items_sql, params! {"id"=>id})
+        .map_err(|e| e.to_string())?;
+    let items = rows
+        .into_iter()
+        .map(|r| {
+            r.unwrap()
+                .into_iter()
+                .map(|v| match v {
+                    Value::NULL => "—".into(),
+                    Value::Bytes(b) => String::from_utf8_lossy(&b).into_owned(),
+                    Value::Int(n) => n.to_string(),
+                    Value::UInt(n) => n.to_string(),
+                    Value::Float(n) => n.to_string(),
+                    Value::Double(n) => n.to_string(),
+                    v => v.as_sql(true),
+                })
+                .collect()
+        })
+        .collect();
+    Ok(InvoiceDetails {
+        invoice,
+        date,
+        party,
+        payment,
+        total,
+        received,
+        change,
+        returned,
+        items,
+    })
+}
+
+pub fn view_invoice(
+    pool: Option<&Pool>,
+    kind: ReportKind,
+    id: i32,
+) -> Result<(bool, InvoiceDetails), String> {
+    if let Some(pool) = pool {
+        let (sale, id) = linked_invoice(pool, kind, id)?;
+        return invoice_details(pool, sale, id).map(|details| (sale, details));
+    }
+    let (sale, id) = match kind {
+        ReportKind::Sales | ReportKind::Receivables => (true, id),
+        ReportKind::Purchases | ReportKind::Debts => (false, id),
+        ReportKind::Payments if id == 1 => (true, 4),
+        ReportKind::Payments => (false, 2),
+        ReportKind::Returns => (true, 9),
+        _ => return Err("Pilih faktur untuk melihat rincian".into()),
+    };
+    super::demo::invoice(sale, id).map(|d| (sale, d))
+}
+
+pub fn view_report(
+    pool: Option<&Pool>,
+    kind: ReportKind,
+    from: &str,
+    to: &str,
+) -> Result<Vec<Vec<String>>, String> {
+    date(from)?;
+    date(to)?;
+    if from > to {
+        return Err("Tanggal awal melebihi tanggal akhir".into());
+    }
+    if let Some(pool) = pool {
+        report(pool, kind, from, to)
+    } else {
+        Ok(super::demo::report(kind, from, to))
+    }
+}
+
+pub fn linked_invoice(pool: &Pool, kind: ReportKind, id: i32) -> Result<(bool, i32), String> {
+    match kind {
+        ReportKind::Sales | ReportKind::Receivables => Ok((true, id)),
+        ReportKind::Purchases | ReportKind::Debts => Ok((false, id)),
+        ReportKind::Payments | ReportKind::Returns => {
+            let table = if kind == ReportKind::Payments {
+                "payments"
+            } else {
+                "returns"
+            };
+            let row: Option<(String, i32)> = pool
+                .get_conn()
+                .and_then(|mut c| {
+                    c.exec_first(
+                        format!("SELECT ref_type,ref_id FROM {table} WHERE id=:id"),
+                        params! {"id"=>id},
+                    )
+                })
+                .map_err(|e| e.to_string())?;
+            row.map(|(kind, id)| (kind == "PENJUALAN", id))
+                .ok_or("Faktur terkait tidak ditemukan".into())
+        }
+        _ => Err("Pilih daftar transaksi untuk melihat rincian obat".into()),
+    }
 }
 
 pub fn pay(pool: &Pool, sale: bool, id: i32, amount: f64, operator: i32) -> Result<(), String> {
@@ -799,6 +939,50 @@ mod tests {
             expired_date: None,
             initial_stock: 0,
         };
+        let first_code = super::super::queries::generate_product_code(&pool).unwrap();
+        let second_code = super::super::queries::generate_product_code(&pool).unwrap();
+        assert_ne!(first_code, second_code);
+        assert_eq!(first_code.len(), 20);
+        assert!(first_code.bytes().all(|b| b.is_ascii_digit()));
+        let mut generated = super::super::queries::NewProductInput {
+            code: first_code.clone(),
+            name: "A barcode reference 8999909001".into(),
+            ..duplicate.clone()
+        };
+        let generated_id = super::super::queries::insert_product(&pool, &generated).unwrap();
+        let found = super::super::queries::get_products(&pool, Some(&first_code)).unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].code, first_code);
+        assert!(super::super::queries::insert_product(&pool, &generated).is_err());
+        // An exact scan must win over a different medicine mentioning that code in its name.
+        let matches = super::super::queries::get_products(&pool, Some("8999909001")).unwrap();
+        assert_eq!(matches.len(), 2);
+        assert_eq!(matches[0].code, "8999909001");
+        generated.code = "8999909001".into();
+        assert!(super::super::queries::update_product(&pool, generated_id, &generated).is_err());
+        generated.code = second_code.clone();
+        super::super::queries::update_product(&pool, generated_id, &generated).unwrap();
+        assert!(
+            super::super::queries::get_products(&pool, Some(&first_code))
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            super::super::queries::get_products(&pool, Some(&second_code)).unwrap()[0].id,
+            generated_id
+        );
+        let unchanged = counts(&mut conn);
+        assert!(
+            super::super::queries::update_product_barcode(&pool, generated_id, "8999909001")
+                .is_err()
+        );
+        assert!(super::super::queries::update_product_barcode(&pool, generated_id, "").is_err());
+        super::super::queries::update_product_barcode(&pool, generated_id, "000123456789").unwrap();
+        assert_eq!(counts(&mut conn), unchanged);
+        assert_eq!(
+            super::super::queries::get_products(&pool, Some("000123456789")).unwrap()[0].id,
+            generated_id
+        );
         assert!(super::super::queries::import_product_inputs(
             &pool,
             &[duplicate.clone(), duplicate]
@@ -856,5 +1040,50 @@ mod tests {
             .unwrap();
         assert_eq!(restored_sales, 2);
         std::fs::remove_file(backup).unwrap();
+        let original =
+            super::super::queries::get_products(&pool, Some("8999909001")).unwrap()[0].total_stock;
+        let header: Option<i32> = conn
+            .query_first("SELECT id FROM sales WHERE invoice_no='TEST-SALE'")
+            .unwrap();
+        let detail = invoice_details(&pool, true, header.unwrap()).unwrap();
+        assert_eq!(detail.items[0][2], "10");
+        assert_eq!(detail.items[0][3], "Strip");
+        assert_eq!(detail.items[0][7], "100 Tablet");
+        assert!(detail.items[0][8].contains("BATCH-PCT-01"));
+        let purchase_detail = invoice_details(&pool, false, purchase_id).unwrap();
+        assert_eq!(purchase_detail.items[0][3], "Tablet");
+        super::super::demo::seed(&pool).unwrap();
+        assert_eq!(
+            super::super::queries::get_products(&pool, Some("8999909001")).unwrap()[0].total_stock,
+            original
+        );
+        for expected in super::super::demo::products() {
+            let actual = super::super::queries::get_products(&pool, Some(&expected.code)).unwrap();
+            assert_eq!(actual.len(), 1);
+            assert_eq!(
+                actual[0].total_stock, expected.total_stock,
+                "Stok {}",
+                expected.code
+            );
+        }
+        assert_eq!(
+            conn.query_first::<u64, _>("SELECT COUNT(*) FROM sales WHERE invoice_no LIKE 'CTH-%'")
+                .unwrap(),
+            Some(9)
+        );
+        assert_eq!(
+            conn.query_first::<u64, _>(
+                "SELECT COUNT(*) FROM purchases WHERE invoice_no LIKE 'CTH-%'"
+            )
+            .unwrap(),
+            Some(3)
+        );
+        super::super::demo::seed(&pool).unwrap();
+        assert_eq!(
+            conn.query_first::<u64, _>("SELECT COUNT(*) FROM sales WHERE invoice_no LIKE 'CTH-%'")
+                .unwrap(),
+            Some(9)
+        );
+        assert_eq!(settings(&pool).unwrap()["store_name"], "Apotek Uji");
     }
 }

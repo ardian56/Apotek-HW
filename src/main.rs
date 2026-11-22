@@ -159,20 +159,43 @@ fn load_or_init_config() -> AppConfig {
 }
 
 fn main() {
+    if std::env::args().any(|a| a == "--seed-demo") {
+        let result = (|| -> Result<(), String> {
+            let config: AppConfig =
+                serde_json::from_str(&fs::read_to_string(CONFIG_FILE).map_err(|e| e.to_string())?)
+                    .map_err(|e| e.to_string())?;
+            if config.role.to_lowercase() != "server" {
+                return Err("Jalankan pengisian data contoh pada komputer server".into());
+            }
+            let pool = create_pool(&DbConfig {
+                host: config.db_host,
+                port: config.db_port,
+                user: config.db_user,
+                pass: config.db_pass,
+                db_name: config.db_name,
+            })
+            .map_err(|e| e.to_string())?;
+            db::auto_migrate(&pool).map_err(|e| e.to_string())?;
+            db::demo::seed(&pool)
+        })();
+        match result{Ok(())=>println!("Data contoh siap: 17 obat, 9 penjualan, 3 pembelian, pembayaran, retur, dan pending."),Err(e)=>{eprintln!("Data contoh gagal: {e}");std::process::exit(1);}}
+        return;
+    }
+
     let app = fltk::app::App::default();
     AppTheme::apply();
 
     // Mode Preview Cepat (Tanpa butuh database MariaDB jalan)
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|a| a == "--preview") {
-        println!("[PREVIEW MODE] Membuka App Shell Apotek (Modern iB Clone)...");
+        println!("[MODE CONTOH] Membuka pratinjau Apotek POS...");
         let mut shell = gui::views::AppShell::new(None);
         shell.win.show();
         app.run().unwrap();
         return;
     }
 
-    let mut app_config = load_or_init_config();
+    let app_config = load_or_init_config();
     let is_server_mode = app_config.role.to_lowercase() == "server";
 
     let is_running = Arc::new(AtomicBool::new(true));
@@ -237,8 +260,8 @@ fn main() {
 
     let pool_clone = pool.clone();
     let mut login_win_clone = login_view.win.clone();
-    let mut input_user_clone = login_view.input_user.clone();
-    let mut input_pass_clone = login_view.input_pass.clone();
+    let input_user_clone = login_view.input_user.clone();
+    let input_pass_clone = login_view.input_pass.clone();
     let mut lbl_status_clone = login_view.lbl_status.clone();
 
     login_view.btn_login.set_callback(move |_| {
@@ -256,7 +279,15 @@ fn main() {
                 login_win_clone.hide();
 
                 // Buka AppShell Utama dengan Database Pool aktif
-                let mut shell = gui::views::AppShell::for_user(Some(pool_clone.clone()), user);
+                let mut logout_window = login_win_clone.clone();
+                let mut logout_password = input_pass_clone.clone();
+                let mut logout_status = lbl_status_clone.clone();
+                let mut shell =
+                    gui::views::AppShell::for_user(Some(pool_clone.clone()), user, move || {
+                        logout_password.set_value("");
+                        logout_status.set_label("");
+                        logout_window.show();
+                    });
                 shell.win.show();
             }
             Ok(None) => {

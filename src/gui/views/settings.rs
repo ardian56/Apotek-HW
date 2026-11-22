@@ -1,6 +1,6 @@
 use super::components::*;
 use crate::{db::operations, gui::theme::AppTheme as T, models::User};
-use fltk::{enums::FrameType, menu::Choice, prelude::*, window::Window};
+use fltk::{menu::Choice, prelude::*, window::Window};
 use mysql::Pool;
 
 pub struct SettingsView {
@@ -26,7 +26,11 @@ impl SettingsView {
         if let Err(e) = &loaded {
             status.set_label(&format!("Pengaturan gagal dimuat: {e}"));
         }
-        let values = loaded.ok().flatten().unwrap_or_default();
+        let values = if pool.is_none() {
+            crate::db::demo::settings()
+        } else {
+            loaded.ok().flatten().unwrap_or_default()
+        };
         let fields = [
             ("store_name", "Nama apotek"),
             ("store_address", "Alamat"),
@@ -47,7 +51,7 @@ impl SettingsView {
         }
         text(28, 410, 180, 20, "Lebar kertas", 12, false);
         let mut paper = Choice::new(28, 438, 200, 34, None);
-        paper.set_frame(FrameType::BorderBox);
+        style_choice(&mut paper);
         paper.add_choice("58 mm|80 mm");
         paper.set_value(
             if values.get("receipt_paper_width").map(String::as_str) == Some("80") {
@@ -59,8 +63,8 @@ impl SettingsView {
         let mut save = button(28, 490, 200, "Simpan pengaturan", true);
         let mut backup = button(244, 490, 216, "Cadangkan database", false);
         if pool.is_none() || !user.is_admin() {
-            save.deactivate();
-            backup.deactivate();
+            disable(&mut save);
+            disable(&mut backup);
             status
                 .set_label("Pratinjau • Pengaturan hanya dapat disimpan oleh admin yang terhubung");
         }

@@ -16,6 +16,30 @@ pub struct Product {
     pub batches: Vec<ProductBatch>,
 }
 
+impl Product {
+    pub fn earliest_expiry(&self) -> Option<&str> {
+        self.batches
+            .iter()
+            .filter(|b| b.stock > 0)
+            .filter_map(|b| b.expired_date.as_deref())
+            .min()
+    }
+
+    pub fn sellable_stock_on(&self, today: &str) -> i64 {
+        self.batches
+            .iter()
+            .filter(|b| {
+                b.stock > 0
+                    && b.expired_date
+                        .as_deref()
+                        .map(|date| date > today)
+                        .unwrap_or(true)
+            })
+            .map(|b| b.stock as i64)
+            .sum()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProductUnit {
     pub id: i32,
@@ -31,24 +55,6 @@ pub struct ProductBatch {
     pub product_id: i32,
     pub batch_no: String,
     pub expired_date: Option<String>, // "YYYY-MM-DD"
-    pub stock: i32,                  // dalam base_unit
+    pub stock: i32,                   // dalam base_unit
     pub buy_price: f64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ExpiryStatus {
-    Normal,
-    ExpiringSoon, // <= 30 hari
-    Expired,
-}
-
-impl ProductBatch {
-    pub fn check_expiry_status(&self, today: &str) -> ExpiryStatus {
-        if let Some(exp) = &self.expired_date {
-            if exp.as_str() <= today {
-                return ExpiryStatus::Expired;
-            }
-        }
-        ExpiryStatus::Normal
-    }
 }

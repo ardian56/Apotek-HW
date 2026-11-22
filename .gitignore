@@ -3,3 +3,4 @@
 *.pdb
 *.log
 config/db_local.ini
+__pycache__/

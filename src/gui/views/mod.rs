@@ -13,11 +13,4 @@ pub mod stok_opname;
 pub mod transactions;
 
 pub use app_shell::*;
-pub use dashboard::*;
-pub use form_obat::*;
-pub use kasir::*;
 pub use login::*;
-pub use master_crud::*;
-pub use master_obat::*;
-pub use pembelian::*;
-pub use stok_opname::*;

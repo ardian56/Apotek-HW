@@ -52,8 +52,8 @@ pub fn get_products(pool: &Pool, search: Option<&str>) -> Result<Vec<Product>> {
 
     let pattern = format!("%{}%", search.unwrap_or("").trim());
     let rows: Vec<(i32, String, String, Option<String>, Option<i32>, String, i32, f64, i8)> = conn.exec(
-        "SELECT id,code,name,category,supplier_id,base_unit,min_stock,buy_price,is_active FROM products WHERE is_active=1 AND (code LIKE :search OR name LIKE :search) ORDER BY name LIMIT 200",
-        params!{"search"=>pattern})?;
+        "SELECT id,code,name,category,supplier_id,base_unit,min_stock,buy_price,is_active FROM products WHERE is_active=1 AND (code LIKE :search OR name LIKE :search) ORDER BY (code=:exact) DESC,name LIMIT 200",
+        params!{"search"=>pattern,"exact"=>search.unwrap_or("").trim()})?;
     let mut products = Vec::with_capacity(rows.len());
 
     for (id, code, name, cat, sup_id, base_unit, min_stock, buy_price, is_active) in rows {
@@ -114,6 +114,68 @@ pub fn get_products(pool: &Pool, search: Option<&str>) -> Result<Vec<Product>> {
     }
 
     Ok(products)
+}
+
+pub fn view_products(
+    pool: Option<&Pool>,
+    search: Option<&str>,
+) -> std::result::Result<Vec<Product>, String> {
+    if let Some(pool) = pool {
+        return get_products(pool, search).map_err(|e| e.to_string());
+    }
+    let query = search.unwrap_or("").trim().to_lowercase();
+    let mut products = super::demo::products()
+        .into_iter()
+        .filter(|p| {
+            p.name.to_lowercase().contains(&query) || p.code.to_lowercase().contains(&query)
+        })
+        .collect::<Vec<_>>();
+    products.sort_by_key(|p| p.code.to_lowercase() != query);
+    Ok(products)
+}
+
+/// Generate on the shared database server so LAN clients use the same source.
+pub fn generate_product_code(pool: &Pool) -> Result<String> {
+    let mut conn = pool.get_conn()?;
+    for _ in 0..3 {
+        let value: u64 = conn
+            .query_first("SELECT UUID_SHORT()")?
+            .ok_or_else(|| input_error("Tidak dapat membuat barcode"))?;
+        let code = format!("{value:020}");
+        let existing: Option<i32> = conn.exec_first(
+            "SELECT id FROM products WHERE code=:code",
+            params! {"code"=>&code},
+        )?;
+        if existing.is_none() {
+            return Ok(code);
+        }
+    }
+    Err(input_error("Barcode sudah digunakan. Coba buat lagi."))
+}
+
+pub fn update_product_barcode(pool: &Pool, id: i32, code: &str) -> Result<()> {
+    let code = code.trim();
+    crate::services::barcode::Barcode::new(code).map_err(|e| input_error(&e))?;
+    let mut conn = pool.get_conn()?;
+    let mut tx = conn.start_transaction(TxOpts::default())?;
+    let existing: Option<i32> = tx.exec_first(
+        "SELECT id FROM products WHERE id=:id AND is_active=1 FOR UPDATE",
+        params! {"id"=>id},
+    )?;
+    if existing.is_none() {
+        return Err(input_error("Obat tidak ditemukan atau sudah nonaktif"));
+    }
+    tx.exec_drop(
+        "UPDATE products SET code=:code WHERE id=:id",
+        params! {"code"=>code,"id"=>id},
+    )
+    .map_err(|e| match e {
+        Error::MySqlError(ref error) if error.code == 1062 => {
+            input_error("Barcode sudah digunakan obat lain")
+        }
+        _ => e,
+    })?;
+    tx.commit()
 }
 
 /// Eksekusi transaksi penjualan dengan FEFO (First Expired First Out)
@@ -298,6 +360,7 @@ pub fn auto_migrate(pool: &Pool) -> Result<()> {
             "DECIMAL(5,2) NOT NULL DEFAULT 0",
         ),
         ("purchase_items", "batch_id", "INT NULL"),
+        ("purchase_items", "unit_name", "VARCHAR(30) NULL"),
         ("customers", "is_active", "TINYINT(1) NOT NULL DEFAULT 1"),
         ("doctors", "is_active", "TINYINT(1) NOT NULL DEFAULT 1"),
     ] {
@@ -560,16 +623,6 @@ pub fn insert_customer(pool: &Pool, name: &str, phone: &str, address: &str) -> R
 }
 
 // Doctors
-pub fn get_doctors(pool: &Pool) -> Result<Vec<(i32, String, String)>> {
-    let mut conn = pool.get_conn()?;
-    let rows: Vec<(i32, String, Option<String>)> =
-        conn.query("SELECT id, name, sip_no FROM doctors WHERE is_active=1 ORDER BY name ASC")?;
-    Ok(rows
-        .into_iter()
-        .map(|(id, name, s)| (id, name, s.unwrap_or_else(|| "-".to_string())))
-        .collect())
-}
-
 pub fn insert_doctor(pool: &Pool, name: &str, sip_no: &str) -> Result<i32> {
     let mut conn = pool.get_conn()?;
     conn.exec_drop(
@@ -583,45 +636,6 @@ pub fn insert_doctor(pool: &Pool, name: &str, sip_no: &str) -> Result<i32> {
 }
 
 // Users
-pub fn get_users_list(pool: &Pool) -> Result<Vec<(i32, String, String, String, i8)>> {
-    let mut conn = pool.get_conn()?;
-    let rows: Vec<(i32, String, String, String, i8)> = conn.query(
-        "SELECT id, username, full_name, role, is_active FROM users ORDER BY full_name ASC",
-    )?;
-    Ok(rows)
-}
-
-pub fn insert_user(
-    pool: &Pool,
-    username: &str,
-    password_hash: &str,
-    full_name: &str,
-    role: &str,
-) -> Result<i32> {
-    if username.trim().is_empty()
-        || full_name.trim().is_empty()
-        || !(8..=72).contains(&password_hash.len())
-        || !matches!(role, "ADMIN" | "KASIR" | "GUDANG")
-    {
-        return Err(input_error(
-            "Username, nama, role, dan password minimal 8 karakter wajib diisi",
-        ));
-    }
-    let password_hash = bcrypt::hash(password_hash, 12).map_err(|e| input_error(&e.to_string()))?;
-    let mut conn = pool.get_conn()?;
-    conn.exec_drop(
-        "INSERT INTO users (username, password_hash, full_name, role, is_active) \
-         VALUES (:u, :p, :fn, :role, 1)",
-        params! {
-            "u" => username,
-            "p" => password_hash,
-            "fn" => full_name,
-            "role" => role,
-        },
-    )?;
-    Ok(conn.last_insert_id() as i32)
-}
-
 // Stock Opname
 pub fn get_stock_opname_items(pool: &Pool) -> Result<Vec<(i32, String, String, String, i32)>> {
     let mut conn = pool.get_conn()?;

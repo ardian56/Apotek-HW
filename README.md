@@ -2,7 +2,7 @@
 
 Aplikasi desktop *Point of Sale* (POS) dan manajemen inventori apotek yang dirancang **super ringan, cepat, dan stabil** untuk spesifikasi komputer rendah (Intel Core 2 Duo, RAM 1 GB, HDD, Windows 7 SP1 32-bit hingga Windows 11).
 
-Adaptasi modul demo video, pratinjau tampilan, dan batas pengujian tersedia di [panduan adaptasi desktop](docs/video-reference.md). Buka pratinjau tanpa database dengan `cargo run -- --preview`.
+Adaptasi modul demo video, pratinjau tampilan, dan batas pengujian tersedia di [panduan adaptasi desktop](docs/video-reference.md). Buka pratinjau berisi data contoh dengan `cargo run -- --preview`. Untuk menambahkan contoh ke database server, jalankan `cargo run -- --seed-demo` sekali; pengisian dapat diulang tanpa duplikasi.
 
 ---
 
@@ -36,7 +36,7 @@ kasir_apotek/
     ├── hardware/               # Driver cetak RAW ESC/POS struk thermal 58mm/80mm
     ├── models/                 # Struct data (Product, Batch, Unit, Sale, User)
     ├── network/                # Auto-discovery LAN UDP port 45454 (Server & Client)
-    └── services/               # Logika FEFO, validasi rugi kasir, import/export Excel
+    └── services/               # Impor dan ekspor Excel
 ```
 
 ---

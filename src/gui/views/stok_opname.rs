@@ -20,30 +20,36 @@ impl StokOpnameView {
             13,
             false,
         );
-        let mut refresh = button(28, 100, 160, "Muat ulang", false);
-        let mut status = text(212, 100, 950, 30, "", 12, false);
+        let mut refresh = button(28, 112, 160, "Muat ulang", false);
+        let status = text(28, 592, 1144, 18, "", 12, false);
         let mut grid = Grid::new(
             28,
-            154,
+            166,
             1140,
-            370,
+            358,
             &["ID", "Kode", "Obat", "Satuan", "Stok sistem"],
         );
-        grid.table.set_col_width(2, 440);
+        for (column, width) in [0, 160, 550, 134, 260].iter().enumerate() {
+            grid.table.set_col_width(column as i32, *width);
+        }
         let mut save = button(28, 552, 240, "Catat stok fisik terpilih", true);
         if pool.is_none() {
-            save.deactivate();
+            disable(&mut save);
         }
         let update = {
             let pool = pool.clone();
             let mut g = grid.clone();
             let mut st = status.clone();
             move || {
-                let Some(p) = &pool else {
-                    st.set_label("Pratinjau • Hubungkan database untuk menyesuaikan stok");
-                    return;
+                let result = if let Some(p) = &pool {
+                    db::get_stock_opname_items(p).map_err(|e| e.to_string())
+                } else {
+                    Ok(db::demo::products()
+                        .into_iter()
+                        .map(|p| (p.id, p.code, p.name, p.base_unit, p.total_stock))
+                        .collect())
                 };
-                match db::get_stock_opname_items(p) {
+                match result {
                     Ok(rows) => {
                         st.set_label(&format!(
                             "{} obat. Penyesuaian dicatat pada kartu stok.",

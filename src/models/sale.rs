@@ -43,12 +43,3 @@ pub struct SaleItemBatchDeduction {
     pub qty_deducted: i32,
     pub buy_price_snapshot: f64,
 }
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PendingSale {
-    pub id: i32,
-    pub operator_id: i32,
-    pub customer_name: String,
-    pub cart_json: String,
-    pub created_at: String,
-}

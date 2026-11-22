@@ -95,7 +95,7 @@ fn editor(
     let mut save = button(24, height - 56, 200, "Simpan", true);
     let mut cancel = button(240, height - 56, 120, "Batal", false);
     let mut w = win.clone();
-    cancel.set_callback(move |_| w.hide());
+    cancel.set_callback(move |_| close_modal(&mut w));
     let mut w = win.clone();
     save.set_callback(move |_|{
         let result=(||->Result<(),String>{
@@ -120,10 +120,11 @@ fn editor(
             let sql=if let Some(row)=&existing{params.push(Value::from(row[0].as_str()));format!("UPDATE {table} SET {} WHERE id=?",columns.iter().map(|c|format!("{c}=?")).collect::<Vec<_>>().join(","))}
                 else{format!("INSERT INTO {table} ({}) VALUES ({})",columns.join(","),vec!["?";columns.len()].join(","))};
             tx.exec_drop(sql,params).map_err(|e|e.to_string())?;tx.commit().map_err(|e|e.to_string())
-        })();match result{Ok(())=>{updated();w.hide();},Err(e)=>status.set_label(&format!("Simpan gagal: {e}"))}
+        })();match result{Ok(())=>{updated();close_modal(&mut w);},Err(e)=>status.set_label(&format!("Simpan gagal: {e}"))}
     });
     win.end();
     win.make_modal(true);
+    win.set_callback(close_modal);
     win.show();
 }
 
@@ -137,21 +138,21 @@ impl MasterSimpleView {
     ) -> Self {
         let mut win = Window::new(0, 108, 1200, 612, None);
         win.set_color(T::BG_APP);
-        text(28, 20, 900, 32, title, 22, true);
-        let mut search = input(28, 70, 540, "Cari nama / username", "");
+        page_header(title, "Kelola data apotek melalui form tambah dan edit.");
+        let mut search = input(28, 88, 540, "Cari nama / username", "");
         search.set_trigger(CallbackTrigger::EnterKey);
-        let mut refresh = button(588, 94, 148, "Tampilkan", true);
-        let mut add = button(756, 94, 180, "Tambah", true);
-        let mut edit = button(952, 94, 212, "Edit data terpilih", false);
+        let mut refresh = button(588, 112, 148, "Tampilkan", true);
+        let mut add = button(984, 24, 188, "Tambah", true);
+        let mut edit = button(28, 552, 160, "Edit data terpilih", false);
         let mut headers = vec!["ID"];
         headers.extend(labels.clone());
-        let mut grid = Grid::new(28, 170, 1140, 352, &headers);
-        let mut status = text(28, 132, 1140, 26, "", 12, false);
-        let mut deactivate = button(28, 552, 200, "Nonaktifkan", false);
+        let grid = Grid::new(28, 166, 1144, 358, &headers);
+        let status = text(28, 592, 1144, 18, "", 12, false);
+        let mut deactivate = button(204, 552, 200, "Nonaktifkan", false);
         if pool.is_none() {
-            add.deactivate();
-            edit.deactivate();
-            deactivate.deactivate();
+            disable(&mut add);
+            disable(&mut edit);
+            disable(&mut deactivate);
         }
         let update = {
             let pool = pool.clone();
@@ -160,12 +161,12 @@ impl MasterSimpleView {
             let mut st = status.clone();
             let s = search.clone();
             move || {
-                let Some(p) = &pool else {
-                    g.set(vec![]);
-                    st.set_label("Pratinjau • Hubungkan database untuk mengelola master data");
-                    return;
+                let result = if let Some(p) = &pool {
+                    rows(p, table, &columns)
+                } else {
+                    Ok(db::demo::master_rows(table))
                 };
-                match rows(p, table, &columns) {
+                match result {
                     Ok(data) => {
                         let query = s.value().to_lowercase();
                         let data = data
