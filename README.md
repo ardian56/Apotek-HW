@@ -4,6 +4,8 @@ Aplikasi desktop *Point of Sale* (POS) dan manajemen inventori apotek yang diran
 
 Adaptasi modul demo video, pratinjau tampilan, dan batas pengujian tersedia di [panduan adaptasi desktop](docs/video-reference.md). Buka pratinjau berisi data contoh dengan `cargo run -- --preview`. Untuk menambahkan contoh ke database server, jalankan `cargo run -- --seed-demo` sekali; pengisian dapat diulang tanpa duplikasi.
 
+Hasil pemeriksaan fungsi transaksi, stok, pending/cetak, dan batas produk tersedia pada [audit POS](docs/pos-audit.md). Nama pada sidebar dan login mengikuti **Pengaturan → Nama apotek**.
+
 ---
 
 ## 1. Arsitektur & Teknologi

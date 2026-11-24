@@ -2,7 +2,7 @@ use crate::gui::theme::AppTheme as T;
 use fltk::{
     button::Button,
     draw,
-    enums::{Align, Color, Font, FrameType},
+    enums::{Align, Color, Event, Font, FrameType, Shortcut},
     frame::Frame,
     input::Input,
     prelude::*,
@@ -72,6 +72,66 @@ pub fn page_header(title: &str, description: &str) {
     sub.set_label_color(T::TEXT_MUTED);
 }
 
+pub fn fit_page(page: &mut fltk::window::Window, parent: &fltk::window::Window) {
+    fn children(
+        group: &fltk::group::Group,
+        layout: &mut Vec<(fltk::widget::Widget, i32, i32, i32, i32)>,
+        grids: &mut Vec<(Table, i32, Vec<i32>)>,
+    ) {
+        for i in 0..group.children() {
+            if let Some(widget) = group.child(i) {
+                layout.push((
+                    widget.clone(),
+                    widget.x(),
+                    widget.y(),
+                    widget.w(),
+                    widget.h(),
+                ));
+                if let Some(table) = Table::from_dyn_widget(&widget) {
+                    let widths = (0..table.cols()).map(|c| table.col_width(c)).collect();
+                    grids.push((table.clone(), table.w(), widths));
+                } else if let Some(child) = widget.as_group() {
+                    children(&child, layout, grids);
+                }
+            }
+        }
+    }
+    let mut grids = Vec::new();
+    let mut layout = Vec::new();
+    children(&page.as_group().unwrap(), &mut layout, &mut grids);
+    page.resize(
+        super::app_shell::SIDEBAR_WIDTH,
+        super::app_shell::HEADER_HEIGHT,
+        parent.w() - super::app_shell::SIDEBAR_WIDTH,
+        parent.h() - super::app_shell::HEADER_HEIGHT,
+    );
+    // Scroll resizes its viewport only; apply the same geometry to its content as other pages.
+    for (mut widget, x, y, width, height) in layout {
+        resize_in_page(&mut widget, page, x, y, width, height);
+    }
+    for (mut table, width, columns) in grids {
+        for (i, column) in columns.iter().enumerate() {
+            table.set_col_width(i as i32, column * table.w() / width);
+        }
+    }
+}
+
+pub fn resize_in_page<W: WidgetExt>(
+    widget: &mut W,
+    page: &fltk::window::Window,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+) {
+    widget.resize(
+        x * page.w() / 1200,
+        y * page.h() / 612,
+        width * page.w() / 1200,
+        height * page.h() / 612,
+    );
+}
+
 pub fn panel(x: i32, y: i32, w: i32, h: i32) -> Frame {
     let mut f = Frame::new(x, y, w, h, None);
     f.set_frame(FrameType::BorderBox);
@@ -112,6 +172,36 @@ pub struct Grid {
     pub headers: Rc<RefCell<Vec<String>>>,
 }
 
+pub fn select_rows(table: &mut Table, event: Event, anchor: &std::cell::Cell<i32>) -> bool {
+    if event != Event::Push || fltk::app::event_button() != 1 {
+        return false;
+    }
+    let Some((context, row, _, _)) = table.cursor2rowcol() else {
+        return false;
+    };
+    if context != TableContext::Cell || row < 0 {
+        return false;
+    }
+    if fltk::app::event_state().contains(Shortcut::Shift) {
+        let previous = table.get_selection().0;
+        let first = if anchor.get() < 0 {
+            if previous >= 0 {
+                previous
+            } else {
+                row
+            }
+        } else {
+            anchor.get()
+        };
+        table.set_selection(first.min(row), 0, first.max(row), table.cols() - 1);
+        table.redraw();
+        true
+    } else {
+        anchor.set(row);
+        false
+    }
+}
+
 impl Grid {
     pub fn new(x: i32, y: i32, w: i32, h: i32, headers: &[&str]) -> Self {
         let mut table = Table::new(x, y, w, h, None);
@@ -123,6 +213,8 @@ impl Grid {
         table.set_row_height_all(34);
         table.set_col_resize(true);
         table.end();
+        let anchor = std::cell::Cell::new(-1);
+        table.handle(move |table, event| select_rows(table, event, &anchor));
         let rows = Rc::new(RefCell::new(Vec::<Vec<String>>::new()));
         let header = Rc::new(RefCell::new(
             headers.iter().map(|s| s.to_string()).collect::<Vec<_>>(),

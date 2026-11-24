@@ -255,7 +255,7 @@ fn main() {
     }
 
     // Tampilkan Layar Login
-    let mut login_view = LoginView::new();
+    let mut login_view = LoginView::new(pool.clone());
     login_view.win.show();
 
     let pool_clone = pool.clone();

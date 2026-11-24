@@ -11,6 +11,7 @@ pub struct FormObatModal {
     pub choice_kategori: Choice,
     pub choice_suplier: Choice,
     pub input_satuan_dasar: Input,
+    pub input_satuan_beli: Input,
     pub input_harga_beli: Input,
     pub input_min_stok: Input,
     pub input_harga_jual_1: Input,
@@ -60,6 +61,7 @@ impl FormObatModal {
         let mut input_satuan_dasar = input(444, 162, 104, "Satuan dasar", "Tablet");
         let mut input_min_stok = input(564, 162, 100, "Stok minimum", "10");
         let mut input_harga_beli = input(16, 236, 180, "Harga beli dasar (Rp)", "0");
+        let mut input_satuan_beli = input(444, 236, 220, "Satuan beli (kosong: dasar)", "");
         let mut input_harga_jual_1 = input(212, 236, 216, "Harga jual dasar (Rp)", "0");
         let mut input_nama_satuan_2 = input(16, 310, 200, "Satuan kedua", "");
         let mut input_konversi_2 = input(232, 310, 120, "Isi satuan dasar", "1");
@@ -78,6 +80,7 @@ impl FormObatModal {
             input_kode.set_value(&p.code);
             input_nama.set_value(&p.name);
             input_satuan_dasar.set_value(&p.base_unit);
+            input_satuan_beli.set_value(&p.purchase_unit);
             input_min_stok.set_value(&p.min_stock.to_string());
             input_harga_beli.set_value(&p.buy_price.to_string());
             if let Some(u) = p.units.iter().find(|u| u.conversion_qty == 1) {
@@ -110,6 +113,7 @@ impl FormObatModal {
             choice_kategori,
             choice_suplier,
             input_satuan_dasar,
+            input_satuan_beli,
             input_harga_beli,
             input_min_stok,
             input_harga_jual_1,

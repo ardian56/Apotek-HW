@@ -21,6 +21,10 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE TABLE IF NOT EXISTS suppliers (
     id INT AUTO_INCREMENT PRIMARY KEY,
     name VARCHAR(100) NOT NULL,
+    code VARCHAR(50) NOT NULL DEFAULT '',
+    email VARCHAR(150) NOT NULL DEFAULT '',
+    bank_account VARCHAR(150) NOT NULL DEFAULT '',
+    notes TEXT,
     phone VARCHAR(25),
     address TEXT,
     is_active TINYINT(1) NOT NULL DEFAULT 1,
@@ -42,6 +46,14 @@ CREATE TABLE IF NOT EXISTS doctors (
     INDEX idx_doctor_name (name)
 ) ENGINE=InnoDB;
 
+CREATE TABLE IF NOT EXISTS salespeople (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    phone VARCHAR(25),
+    address TEXT,
+    is_active TINYINT(1) NOT NULL DEFAULT 1
+) ENGINE=InnoDB;
+
 -- 3. MASTER OBAT & MULTI-SATUAN
 CREATE TABLE IF NOT EXISTS products (
     id INT AUTO_INCREMENT PRIMARY KEY,
@@ -50,6 +62,7 @@ CREATE TABLE IF NOT EXISTS products (
     category VARCHAR(50) DEFAULT 'Umum',
     supplier_id INT NULL,
     base_unit VARCHAR(30) NOT NULL,
+    purchase_unit VARCHAR(30) NOT NULL DEFAULT '',
     min_stock INT NOT NULL DEFAULT 0,
     buy_price DECIMAL(15, 2) NOT NULL DEFAULT 0,
     is_active TINYINT(1) NOT NULL DEFAULT 1,
@@ -91,6 +104,8 @@ CREATE TABLE IF NOT EXISTS sales (
     due_date DATE NULL,
     customer_id INT NULL,
     doctor_id INT NULL,
+    salesperson_id INT NULL,
+    shipping DECIMAL(15,2) NOT NULL DEFAULT 0,
     operator_id INT NOT NULL,
     subtotal DECIMAL(15, 2) NOT NULL DEFAULT 0,
     discount DECIMAL(15, 2) NOT NULL DEFAULT 0,
@@ -101,13 +116,16 @@ CREATE TABLE IF NOT EXISTS sales (
     INDEX idx_sale_date (sale_date),
     FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL,
     FOREIGN KEY (doctor_id) REFERENCES doctors(id) ON DELETE SET NULL,
-    FOREIGN KEY (operator_id) REFERENCES users(id)
+    FOREIGN KEY (operator_id) REFERENCES users(id),
+    CONSTRAINT fk_sales_salesperson FOREIGN KEY(salesperson_id) REFERENCES salespeople(id) ON DELETE SET NULL
 ) ENGINE=InnoDB;
 
 CREATE TABLE IF NOT EXISTS sale_items (
     id INT AUTO_INCREMENT PRIMARY KEY,
     sale_id INT NOT NULL,
     product_id INT NOT NULL,
+    product_code_snapshot VARCHAR(50) NULL,
+    product_name_snapshot VARCHAR(150) NULL,
     unit_name VARCHAR(30) NOT NULL,
     qty INT NOT NULL,
     conversion_qty INT NOT NULL DEFAULT 1,

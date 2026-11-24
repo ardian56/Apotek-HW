@@ -1,6 +1,9 @@
 use crate::models::Sale;
 
 pub struct ReceiptSettings {
+    pub customer_name: String,
+    pub operator_name: String,
+    pub returned: bool,
     pub store_name: String,
     pub address: String,
     pub phone: String,
@@ -13,6 +16,9 @@ pub struct ReceiptSettings {
 impl Default for ReceiptSettings {
     fn default() -> Self {
         Self {
+            customer_name: "Pelanggan umum".into(),
+            operator_name: String::new(),
+            returned: false,
             store_name: "APOTEK SEHAT SEJAHTERA".to_string(),
             address: "Jl. Merdeka No. 45, Kota Sehat".to_string(),
             phone: "0812-3456-7890".to_string(),
@@ -24,11 +30,34 @@ impl Default for ReceiptSettings {
     }
 }
 
+impl ReceiptSettings {
+    pub fn from_values(values: &std::collections::BTreeMap<String, String>) -> Self {
+        Self {
+            customer_name: "Pelanggan umum".into(),
+            operator_name: String::new(),
+            returned: false,
+            store_name: crate::db::operations::pharmacy_name_from_values(values),
+            address: values.get("store_address").cloned().unwrap_or_default(),
+            phone: values.get("store_phone").cloned().unwrap_or_default(),
+            header_note: values.get("receipt_header").cloned().unwrap_or_default(),
+            footer_note: values.get("receipt_footer").cloned().unwrap_or_default(),
+            paper_width: values
+                .get("receipt_paper_width")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(58),
+            printer_name: values.get("printer_name").cloned().unwrap_or_default(),
+        }
+    }
+}
+
 pub fn generate_escpos_bytes(sale: &Sale, settings: &ReceiptSettings) -> Vec<u8> {
     let mut buf = Vec::new();
 
     // 1. Inisialisasi printer
     buf.extend_from_slice(b"\x1B@"); // ESC @
+    if settings.returned {
+        buf.extend_from_slice(b"FAKTUR DIRETUR (salinan)\n");
+    }
 
     // 2. Center Align & Double Size Toko
     buf.extend_from_slice(b"\x1Ba\x01"); // Center
@@ -53,11 +82,15 @@ pub fn generate_escpos_bytes(sale: &Sale, settings: &ReceiptSettings) -> Vec<u8>
 
     // 3. Info Nota & Kasir (Left Align)
     buf.extend_from_slice(b"\x1Ba\x00"); // Left align
-    let meta = format!(
-        "No: {}\nTgl: {}\n",
-        sale.invoice_no, sale.sale_date
-    );
+    let meta = format!("No: {}\nTgl: {}\n", sale.invoice_no, sale.sale_date);
     buf.extend_from_slice(meta.as_bytes());
+    buf.extend_from_slice(
+        format!(
+            "Pelanggan: {}\nOperator: {}\n",
+            settings.customer_name, settings.operator_name
+        )
+        .as_bytes(),
+    );
     buf.extend_from_slice(separator.as_bytes());
     buf.extend_from_slice(b"\n");
 
@@ -66,10 +99,20 @@ pub fn generate_escpos_bytes(sale: &Sale, settings: &ReceiptSettings) -> Vec<u8>
         let name_line = format!("{}\n", item.product_name);
         buf.extend_from_slice(name_line.as_bytes());
 
-        let detail_left = format!(" {}x {} @{:.0}", item.qty, item.unit_name, item.sell_price);
-        let detail_right = format!("{:.0}", item.subtotal);
+        let detail_left = format!(
+            " {}x {} @{}",
+            item.qty,
+            item.unit_name,
+            crate::gui::views::components::number(item.sell_price)
+        );
+        let detail_right = crate::gui::views::components::number(item.subtotal);
         let spaces_count = cols.saturating_sub(detail_left.len() + detail_right.len());
-        let item_line = format!("{}{}{}\n", detail_left, " ".repeat(spaces_count), detail_right);
+        let item_line = format!(
+            "{}{}{}\n",
+            detail_left,
+            " ".repeat(spaces_count),
+            detail_right
+        );
         buf.extend_from_slice(item_line.as_bytes());
     }
 
@@ -78,15 +121,37 @@ pub fn generate_escpos_bytes(sale: &Sale, settings: &ReceiptSettings) -> Vec<u8>
 
     // 5. Total, Bayar, Kembali
     let print_row = |buf: &mut Vec<u8>, label: &str, amount: f64| {
-        let val_str = format!("Rp {:.0}", amount);
+        let val_str = crate::gui::views::components::rupiah(amount);
         let sp_count = cols.saturating_sub(label.len() + val_str.len());
         let row_line = format!("{}{}{}\n", label, " ".repeat(sp_count), val_str);
         buf.extend_from_slice(row_line.as_bytes());
     };
 
+    print_row(&mut buf, "Subtotal:", sale.subtotal);
+    if sale.discount > 0.0 {
+        print_row(&mut buf, "Diskon:", sale.discount);
+    }
+    if sale.shipping > 0.0 {
+        print_row(&mut buf, "Ongkos:", sale.shipping);
+    }
     print_row(&mut buf, "Total:", sale.grand_total);
     print_row(&mut buf, "Bayar:", sale.paid_amount);
-    print_row(&mut buf, "Kembali:", sale.change_amount);
+    if sale.payment_type == "KREDIT" {
+        print_row(
+            &mut buf,
+            "Sisa:",
+            if settings.returned {
+                0.0
+            } else {
+                (sale.grand_total - sale.paid_amount).max(0.0)
+            },
+        );
+        if let Some(due) = &sale.due_date {
+            buf.extend_from_slice(format!("Jatuh tempo: {due}\n").as_bytes());
+        }
+    } else {
+        print_row(&mut buf, "Kembali:", sale.change_amount);
+    }
 
     buf.extend_from_slice(separator.as_bytes());
     buf.extend_from_slice(b"\n");
@@ -116,7 +181,12 @@ pub fn print_raw_to_spooler(printer_name: &str, raw_data: &[u8]) -> Result<(), S
     let mut h_printer: HANDLE = 0;
 
     unsafe {
-        if OpenPrinterA(c_printer.as_ptr() as *mut u8, &mut h_printer, ptr::null_mut()) == 0 {
+        if OpenPrinterA(
+            c_printer.as_ptr() as *mut u8,
+            &mut h_printer,
+            ptr::null_mut(),
+        ) == 0
+        {
             return Err(format!("Gagal membuka printer: {}", printer_name));
         }
 

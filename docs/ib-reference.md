@@ -2,9 +2,59 @@
 
 Sumber: sepuluh gambar yang diberikan pengguna di `/home/ardiand/Downloads/IB`. Seluruh gambar sudah diperiksa secara visual pada ukuran aslinya. Salinan tersedia di [references/ib](references/ib). Gambar 1–9 menampilkan iB Apotek 5 Solution 5.2; gambar 10 menampilkan 5.2.761.
 
-Referensi ini melengkapi [referensi video](video-reference.md). Pilihan proyek tetap desktop Windows, antarmuka bersih dan ringan, database LAN, dan cadangan lokal. Perilaku fitur menjadi acuan; warna, ikon, bingkai, dan penumpukan jendela tidak perlu ditiru.
+Referensi ini melengkapi [referensi video](video-reference.md). Hasil pemeriksaan transaksi, perbaikan identitas apotek, dan batas produksi tersedia pada [audit POS](pos-audit.md). Pilihan proyek tetap desktop Windows, antarmuka bersih dan ringan, database LAN, dan cadangan lokal. Perilaku fitur menjadi acuan; warna, ikon, bingkai, dan penumpukan jendela tidak perlu ditiru.
 
-## Temuan per gambar
+## Status penyesuaian, 23 November 2026
+
+Lima tahap penyesuaian di bawah sudah diterapkan. Tabel temuan awal tetap disimpan sebagai catatan audit; kolom perbandingannya menggambarkan keadaan sebelum penyesuaian ini.
+
+| Referensi | Perilaku yang tersedia sekarang |
+| --- | --- |
+| 1 — Master obat | Filter nama/barcode, kategori, suplier, satuan beli, stok, dan ED; navigasi 100 obat per halaman; nomor baris, harga dan satuan beli, suplier, ED terdekat, serta kolom batch melalui gulir horizontal. Harga beli master disimpan per satuan dasar dan ditampilkan sesuai konversi satuan beli. |
+| 2 — Suplier | Kode, nama, alamat, telepon, email, rekening, keterangan, serta impor/ekspor Excel. Kode suplier harus unik. Master Sales tersedia terpisah dari operator. |
+| 3 — Impor obat | Unduh template Excel, pilih berkas, progres persen, dan jumlah baris. Penyimpanan berlangsung dalam transaksi database pada thread terpisah; bila gagal, seluruh impor dibatalkan. Impor obat mencakup master, satuan beli, dan konversi, tetapi belum memulihkan stok/batch historis atau relasi suplier. |
+| 4 — Daftar penjualan | Filter tanggal/pencarian; operator, pelanggan, dan pembayaran tersedia lewat Filter tambahan. Kolom waktu, pembayaran, jatuh tempo, Sales, laba, dan operator; rincian obat per faktur, serta menu cetak/ekspor. Dokter tidak ditampilkan. |
+| 5 — Input penjualan | Baris kode/nama/jumlah/satuan/harga/diskon langsung di atas keranjang. Scan + Enter menambah satu satuan dasar dan scan berulang menaikkan jumlah. Tanggal, faktur otomatis, pembayaran, Sales, dan pelanggan tampil di atas. Baris input dan keranjang memakai lebar penuh. Diskon faktur persen/nominal, ongkos, total, bayar, kembalian, dan pilihan kertas 58/80 mm tampil langsung di bawah. Dokter tidak ditampilkan. ED dan batch tetap dicatat saat stok masuk. |
+| 6 — Detail dan struk | Pratinjau sebelum simpan diberi penanda draf. Faktur tersimpan dapat dipratinjau dan dicetak ulang dari riwayat. Nama pelanggan/operator, diskon, ongkos, total, dan status retur ditampilkan. F4 pada kasir menyimpan dan mencetak dalam satu aksi; setelah tersimpan, F4 mencetak ulang faktur yang sama. F3 menyimpan tanpa mencetak. |
+| 7 — Laporan per barang | Rincian faktur dikelompokkan per kode obat dengan jumlah, satuan, harga, penjualan neto, laba, pelanggan, dan total kelompok. Diskon faktur dialokasikan menurut subtotal barang; ongkos masuk laba faktur, bukan laba per barang. Faktur yang diretur tidak masuk laporan ini. |
+| 8 — Barcode | Antrean beberapa obat, nama/harga pada label, jumlah per obat, hapus/reset, ukuran dan kolom label, DPI 203/300, serta pratinjau/simpan/cetak HTML melalui browser. |
+| 9 — Menu baris obat | Shift memilih rentang baris. Klik kanan mempertahankan pilihan beberapa baris bila klik masih di dalam pilihan. Menu menyediakan edit, nonaktifkan, refresh, kartu stok, barcode, stok opname, isi barcode kemasan, dan batch/ED. Barcode dan nonaktifkan mendukung beberapa obat. |
+| 10 — Grafik bulanan | Pilih bulan `YYYY-MM` untuk grafik harian omzet dan laba, total bulan, serta pratinjau/cetak melalui browser. Grafik juga menampilkan laba negatif. |
+
+Antarmuka memakai tema FLTK terang yang sama pada kasir, master, dan dialog. Navigasi kemudian diubah menjadi sidebar sesuai permintaan pengguna: kelompok menu dapat dibuka-tutup, halaman aktif ditandai, dan akun berada di bawah. Tangkapan layar hasil penyesuaian tersedia di [referensi video](video-reference.md#pratinjau).
+
+### Alur pending dan cetak
+
+Gambar 5 memperlihatkan Simpan F3, Cetak F4, Pending F6, dan Daftar Pending F7 dalam kasir yang sama. Gambar 6 memperlihatkan pratinjau struk untuk faktur tersimpan. Gambar tidak membuktikan urutan internal cetak dan penyimpanan iB; proyek ini menyimpan transaksi terlebih dahulu agar struk final merujuk faktur dan stok yang sudah tercatat.
+
+- Isi keranjang, lalu **F6** menyimpan draf dan mengosongkan kasir untuk transaksi berikutnya. Pembayaran tunai belum harus lunas dan stok belum berkurang.
+- **F7** membuka kembali draf. Menyimpan pending dengan faktur/operator yang sama memperbarui draf, termasuk bila dua client melakukannya bersamaan. Untuk pembelian, suplier juga menjadi bagian identitas draf.
+- Pending lama dengan faktur sama ditampilkan sekali, memakai versi terakhir. Versi lama tidak dihapus saat membaca daftar; semua versi untuk faktur tersebut dikonsumsi ketika transaksi berhasil disimpan.
+- **F3** menyimpan penjualan tanpa mencetak. **F4** menyimpan lalu mencetak dari kasir, tanpa membuka riwayat. Penyimpanan faktur, mutasi stok, dan penghapusan pending terjadi dalam satu transaksi database.
+- Jika cetak gagal setelah penyimpanan, faktur tetap tersimpan. F4 mengulang cetak faktur terakhir tanpa menyimpan ulang atau mengurangi stok lagi. Memulai transaksi baru lewat F5 atau menambah obat memulai keranjang berikutnya.
+- **Lihat struk** hanya membuka pratinjau; sebelum simpan, dokumen bertanda draf. Windows dengan printer yang dikonfigurasi memakai ESC/POS. Pada platform lain atau tanpa nama printer, F4 membuka struk dan dialog cetak browser.
+
+Perbarui aplikasi pada semua PC LAN agar seluruh client memakai alur pending yang sama. Tidak ada penambahan skema untuk perbaikan alur ini.
+
+### Upgrade dan pemeriksaan
+
+Jalankan versi baru pada **komputer server terlebih dahulu**, lalu perbarui dan jalankan client. Server menambahkan kolom satuan beli, metadata suplier, Sales, ongkos, dan snapshot nama/kode obat melalui migrasi. Suplier lama tanpa kode mendapat kode `SUP-{id}`. Data dan pengaturan yang sudah ada tidak diisi ulang oleh migrasi.
+
+Build offline dan sepuluh uji unit lulus. Uji MariaDB sementara mencakup upgrade skema lama, FEFO, diskon/ongkos, Sales/dokter, pemuatan faktur tersimpan, filter dan navigasi master, impor atomik, serta pemulihan cadangan, pending bersamaan/upsert, pending tanpa pembayaran, konsumsi pending saat checkout, serta cetak gagal/ulang tanpa faktur atau mutasi stok ganda. Uji GUI mencakup scan berulang, input langsung, total/kembalian, pilihan beberapa baris, label beberapa obat, menu baris, struk, dan grafik. Uji regresi tabel memastikan header, kolom, dan scrollbar tetap terlihat. Uji sidebar memeriksa seluruh halaman, menu yang dibuka-tutup, penanda aktif, serta akun pada layar lebih pendek. Pembaca barcode independen memverifikasi sebelas kode dan tiga kombinasi ukuran/DPI.
+
+Perintah lengkap tersedia di [pemeriksaan aplikasi](video-reference.md#pemeriksaan). Pengujian menggunakan Linux dan database sementara; database apotek asli tidak dipakai untuk pengujian.
+
+### Batas dan bagian referensi yang belum diketahui
+
+- Antrean barcode dibatasi 200 obat dan 1.000 label per dokumen. Pilih DPI sesuai printer. Label kecil ditolak jika batang barcode terlalu sempit untuk ukuran dan DPI yang dipilih.
+- Laporan per barang memuat paling banyak 10.000 rincian; laporan lain 500 baris. Persempit periode atau pencarian jika mencapai batas.
+- Impor obat hanya menambah master baru secara atomik. Template memakai harga beli/jual **per satuan dasar**; relasi suplier dan stok/batch historis belum diimpor.
+- Retur tetap satu faktur utuh. Makna `Nhari`, jenis penjualan selain `Biasa`, rincian Biaya/Cashflow, dan aturan penghapusan transaksi belum dapat dipastikan dari gambar. Modul dan perilaku keuangan tersebut belum ditambahkan.
+- Windows, scanner/printer fisik, dan koneksi dua komputer LAN masih perlu diuji pada perangkat target.
+
+Penyesuaian kebutuhan pengguna menghilangkan dokter dari antarmuka, meskipun fitur tersebut terlihat pada gambar iB. Data dokter pada database dan metadata pending lama dipertahankan. Kasir terbaru mengikuti gambar yang dikirim pengguna: metadata di atas, input obat satu baris, keranjang lebar, dan diskon/pembayaran di bawah. Filter laporan tetap disembunyikan secara default; cetak/ekspor digabung dalam satu menu. Build dan sepuluh uji unit lulus; uji GUI ulang setelah perubahan terakhir tertahan oleh automatic approval review. Rincian pemeriksaan tersedia pada referensi video.
+
+## Temuan awal per gambar
 
 | Gambar | Fitur yang terlihat | Perbandingan dengan proyek saat diperiksa |
 | --- | --- | --- |
@@ -38,4 +88,4 @@ Referensi ini melengkapi [referensi video](video-reference.md). Pilihan proyek t
 
 Nama master **Sales** terlihat terpisah dari **Karyawan** dan pilihan Sales juga ada pada penjualan. Ini menunjukkan keduanya tidak boleh langsung dianggap sebagai data yang sama. Isi master Sales, pilihan jenis penjualan selain Biasa, serta rincian Biaya/Cashflow tidak terlihat; aturan yang belum ditunjukkan perlu dicatat sebagai belum diketahui.
 
-Dokumen ini merupakan hasil pemeriksaan referensi, bukan klaim bahwa seluruh perbedaan di atas sudah diimplementasikan. Pengujian terakhir aplikasi berlaku untuk fitur yang sudah ada; sepuluh gambar ini memberikan acuan tambahan untuk penyesuaian berikutnya.
+Bagian temuan awal dan urutan penyesuaian mencatat hasil audit sebelum implementasi. Status implementasi terbaru dan batas pengujian tercantum pada bagian awal dokumen ini.

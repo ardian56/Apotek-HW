@@ -8,7 +8,7 @@ pub struct SettingsView {
 }
 
 impl SettingsView {
-    pub fn new(pool: Option<Pool>, user: User) -> Self {
+    pub fn new(pool: Option<Pool>, user: User, mut renamed: impl FnMut(String) + 'static) -> Self {
         let mut win = Window::new(0, 108, 1200, 612, None);
         win.set_color(T::BG_APP);
         text(28, 20, 700, 32, "Pengaturan apotek", 22, true);
@@ -87,8 +87,12 @@ impl SettingsView {
                 "receipt_paper_width".into(),
                 if paper.value() == 1 { "80" } else { "58" }.into(),
             ));
+            data[0].1 = data[0].1.trim().to_string();
             match operations::save_settings(p, &data) {
-                Ok(()) => st.set_label("Pengaturan tersimpan"),
+                Ok(()) => {
+                    renamed(data[0].1.clone());
+                    st.set_label("Pengaturan tersimpan");
+                }
                 Err(e) => st.set_label(&format!("Simpan gagal: {e}")),
             }
         });

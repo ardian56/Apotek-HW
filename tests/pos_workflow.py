@@ -7,7 +7,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from table_redraw import ROOT, x11, xtest, display, click, capture, pixels
+from table_redraw import ROOT, x11, xtest, display, click, capture, pixels, page_position, page_click, row_click, navigate, PAGE_WIDTH
 
 x11.XStringToKeysym.argtypes = [ctypes.c_char_p]
 x11.XStringToKeysym.restype = ctypes.c_ulong
@@ -77,71 +77,70 @@ def screenshot(name):
     return image
 
 
-app = subprocess.Popen([str(ROOT / "target/debug/kasir_apotek"), "--preview"], cwd=ROOT,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-try:
-    time.sleep(0.8)
-    click(420, 45)
-    click(237, 98)  # Create the purchase page before the sale page.
-    click(1080, 169)
-    key("F1")
-    time.sleep(0.25)
-    assert "Tambah barang pembelian" in windows(), "Purchase F1 must open its own form"
-    screenshot("purchase-form")
-    key("Escape")
-    time.sleep(0.2)
-    click(95, 98)
-    click(1080, 169)
-    click(650, 697)  # Clear the preview sale.
-    click(560, 697)  # Confirm clear.
-    key("F1")
-    time.sleep(0.2)
-    assert "Tambah barang pembelian" not in windows(), "Hidden purchase page intercepted sale F1"
-    scan("cth-001")
-    first = screenshot("first-scan")
-    assert "Tambah obat penjualan" not in windows(), "Exact barcode must add without a modal"
-    code = pixels(first, "96x24+40+334")
-    assert len(set(code)) > 1, "Scan did not add medicine"
-    assert len(set(pixels(first, "740x24+40+366"))) == 1, "First scan should use one row"
-    scan("cth-001")
-    second = screenshot("second-scan")
-    assert pixels(second, "96x24+40+334") == code, "Second scan changed medicine"
-    assert pixels(first, "28x24+400+334") != pixels(second, "28x24+400+334"), "Second scan must increase quantity"
-    assert len(set(pixels(second, "740x24+40+366"))) == 1, "Repeated scans should merge"
-    scan("0000000000000000")
-    unknown = screenshot("unknown-scan")
-    assert pixels(unknown, "780x310+40+334") == pixels(second, "780x310+40+334"), "Unknown barcode changed cart"
-    assert "Tambah barang pembelian" not in windows(), "Unknown scan opened a purchase form"
-    click(1080, 169)
-    time.sleep(0.2)
-    assert window_height("Tambah obat penjualan") == 430, "Sale form still includes the purchase section"
-    screenshot("manual-sale")
-    click(120, 410)
-    manual = screenshot("manual-added")
-    assert pixels(manual, "28x24+400+334") != pixels(second, "28x24+400+334"), "Manual sale did not add medicine"
-    click(550, 45)
-    master = screenshot("master")
-    assert len(set(pixels(master, "100x24+936+334"))) > 1, "ED must be visible on the medicine table"
-    click(350, 346)  # Previously select the first row.
-    click(350, 474, button=3)  # Context menu must use the fifth row instead.
-    screenshot("context")
-    key("Down")
-    key("Return")
-    time.sleep(0.25)
-    label = screenshot("label")
-    decoded = subprocess.check_output(["zbarimg", "--quiet", "--raw", "--nodbus", "/tmp/apotek-pos-label.png"], text=True)
-    assert decoded.removesuffix("\n") == "CTH-005", "Context menu acted on a previously selected row"
-    key("Escape")
-    time.sleep(0.2)
-    click(350, 474, button=3)
-    key("Down")
-    key("Down")
-    key("Return")
-    time.sleep(0.25)
-    assert "Batch dan ED obat" in windows(), "Batch and ED details did not open"
-    screenshot("batch-ed")
-    assert app.poll() is None, "App crashed during POS workflow"
-    print("PASS: page-specific F1, direct scans, quantity merge, manual sale, visible ED, and right-click barcode")
-finally:
-    app.terminate()
-    app.wait(timeout=5)
+def cart_region(x, width, row=0, height=24):
+    px, py = page_position(x, 268)
+    return f"{width * PAGE_WIDTH // 1200}x{height}+{px}+{py + 36 + row * 32 + 4}"
+
+
+def master_ed_region():
+    px, py = page_position(1035,166)
+    return f"{100 * PAGE_WIDTH // 1200}x24+{px}+{py + 40}"
+
+
+import os
+import tempfile
+from urllib.parse import unquote, urlparse
+
+with tempfile.TemporaryDirectory(prefix="apotek-pos-test-") as directory:
+    folder=Path(directory);uri_file=folder/"opened-uri";opener=folder/"xdg-open"
+    opener.write_text('#!/usr/bin/python3\nimport os,sys\nfrom pathlib import Path\nPath(os.environ["APOTEK_OPEN_URI_FILE"]).write_text(sys.argv[1])\n')
+    opener.chmod(0o755);env=os.environ.copy();env["PATH"]=directory+os.pathsep+env["PATH"];env["APOTEK_OPEN_URI_FILE"]=str(uri_file)
+    app=subprocess.Popen([str(ROOT/"target/debug/kasir_apotek"),"--preview"],cwd=ROOT,env=env,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
+    def document():
+        time.sleep(0.3);assert uri_file.exists(),"Preview did not open a document";return Path(unquote(urlparse(uri_file.read_text()).path)).read_text()
+    try:
+        time.sleep(0.8)
+        navigate("Pembelian");page_click(1080,41);key("F1");time.sleep(0.25)
+        assert "Tambah barang pembelian" in windows();screenshot("purchase-form");key("Escape");time.sleep(0.2)
+        navigate("Penjualan");page_click(1080,41);key("F5");key("Return");key("F1")
+        assert "Tambah barang pembelian" not in windows(),"Hidden purchase intercepted F1"
+        scan("cth-001");first=screenshot("first-scan");assert "Tambah obat penjualan" not in windows()
+        code=pixels(first,cart_region(40,96));assert len(set(code))>1,"Scan did not add medicine"
+        scan("cth-001");second=screenshot("second-scan");assert pixels(second,cart_region(40,96))==code
+        assert pixels(first,cart_region(580,28))!=pixels(second,cart_region(580,28)),"Scan did not increase quantity"
+        assert len(set(pixels(second,cart_region(40,740,row=1))))==1,"Repeated scan did not merge"
+        scan("0000000000000000");unknown=screenshot("unknown-scan");assert pixels(unknown,cart_region(40,780,height=160))==pixels(second,cart_region(40,780,height=160))
+        scan("paracetamol");assert "Tambah obat penjualan" not in windows(),"Manual search must stay inline"
+        page_click(532,236);key("BackSpace");key("3");page_click(1120,236);manual=screenshot("inline-added")
+        assert pixels(manual,cart_region(580,28))!=pixels(second,cart_region(580,28)),"Inline quantity did not apply"
+        page_click(75,509);key("BackSpace");key("1");key("0");page_click(384,509);key("BackSpace");key("5");key("0");key("0")
+        key("F2");key("BackSpace");scan("5000");screenshot("invoice-discount")
+        page_click(838,569);html=document();assert "Paracetamol 500 mg" in html;assert "Rp 4.550" in html,"Invoice discount or shipping is wrong"
+        screenshot("receipt-preview")
+        navigate("Obat");master=screenshot("master");assert len(set(pixels(master,master_ed_region())))>1,"ED missing"
+        row_click(0)
+        shift=x11.XKeysymToKeycode(display,x11.XStringToKeysym(b"Shift_L"));xtest.XTestFakeKeyEvent(display,shift,1,0);x11.XFlush(display)
+        row_click(4);xtest.XTestFakeKeyEvent(display,shift,0,0);x11.XFlush(display)
+        row_click(4,button=3);screenshot("context");key("Down");key("Down");key("Down");key("Return");time.sleep(0.25)
+        assert "Label barcode" in windows(),"Barcode menu did not open";screenshot("barcode-queue");click(100,481);labels=document()
+        assert labels.count("<article class=label>")==5,"Selected medicines did not enter label queue"
+        for code in ["CTH-001","CTH-002","CTH-003","CTH-004","CTH-005"]:assert code in labels
+        assert "Rp 900" in labels and "3,50.0mm" not in labels
+        click(300,228);xtest.XTestFakeKeyEvent(display,shift,1,0);x11.XFlush(display);click(300,260);xtest.XTestFakeKeyEvent(display,shift,0,0);x11.XFlush(display)
+        click(742,290);key("BackSpace");key("2");click(830,335);click(100,481);labels=document()
+        assert labels.count("<article class=label>")==7,"Label count did not apply to selected medicine"
+        key("Escape");time.sleep(0.2);row_click(4,button=3);key("Down");key("Down");key("Return");time.sleep(0.25)
+        assert "Kartu stok obat" in windows();screenshot("stock-card");key("Escape");time.sleep(0.2)
+        row_click(4,button=3)
+        for _ in range(4):key("Down")
+        key("Return");time.sleep(0.25);assert "Batch dan ED obat" in windows();screenshot("batch-ed");key("Escape")
+        navigate("Penjualan");screenshot("history");page_click(872,41);key("Down");key("Return");receipt=document();assert "Faktur:" in receipt,"Archived receipt missing"
+        page_click(924,128);screenshot("history-filters")
+        page_click(960,195);key("End");key("Return")
+        page_click(872,41);key("Down");key("Down");key("Return");listed=document()
+        assert "<th>Dokter</th>" not in listed, "Doctor is still shown in printed sales"
+        assert "KREDIT" in listed and "TUNAI" not in listed, "Additional payment filter did not apply"
+        navigate("Laporan");page_click(872,41);key("Down");key("Return");key("Return");time.sleep(0.3);chart=document();assert "Omzet" in chart and "Laba" in chart and "<svg" in chart
+        assert app.poll() is None,"App crashed";print("PASS: inline sales, scans, invoice totals, batch barcode labels, row actions, receipts, and monthly chart")
+    finally:
+        app.terminate();app.wait(timeout=5)

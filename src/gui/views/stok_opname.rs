@@ -3,6 +3,33 @@ use crate::{db, gui::theme::AppTheme as T};
 use fltk::{prelude::*, window::Window};
 use mysql::Pool;
 
+pub fn adjust_stock(
+    pool: &Pool,
+    id: i32,
+    name: &str,
+    unit: &str,
+    current: i32,
+) -> Result<bool, String> {
+    let Some(value) = fltk::dialog::input_default(
+        &format!("Stok fisik {name} ({unit}):"),
+        &current.to_string(),
+    ) else {
+        return Ok(false);
+    };
+    let quantity = value
+        .trim()
+        .parse::<i32>()
+        .map_err(|_| "Stok fisik harus bilangan bulat")?;
+    if quantity < 0 {
+        return Err("Stok tidak boleh negatif".into());
+    }
+    let Some(reason) = fltk::dialog::input_default("Alasan penyesuaian stok", "") else {
+        return Ok(false);
+    };
+    db::save_stock_opname_adjustment(pool, id, quantity, &reason).map_err(|e| e.to_string())?;
+    Ok(true)
+}
+
 pub struct StokOpnameView {
     pub win: Window,
 }
@@ -84,28 +111,19 @@ impl StokOpnameView {
                 st.set_label("Pilih satu obat pada tabel");
                 return;
             };
-            let Some(quantity) = fltk::dialog::input_default(
-                &format!("Stok fisik {} ({}):", row[2], row[3]),
-                &row[4],
-            ) else {
-                return;
-            };
-            let real = match quantity.trim().parse::<i32>() {
-                Ok(n) if n >= 0 => n,
-                _ => {
-                    st.set_label("Stok fisik harus bilangan bulat, minimal nol");
-                    return;
-                }
-            };
-            let Some(reason) = fltk::dialog::input_default("Alasan penyesuaian stok", "") else {
-                return;
-            };
-            match db::save_stock_opname_adjustment(p, row[0].parse().unwrap_or(0), real, &reason) {
-                Ok(()) => {
+            match adjust_stock(
+                p,
+                row[0].parse().unwrap_or(0),
+                &row[2],
+                &row[3],
+                row[4].parse().unwrap_or(0),
+            ) {
+                Ok(true) => {
                     u();
                     st.set_label("Stok fisik dan kartu stok tersimpan");
                 }
-                Err(e) => st.set_label(&format!("Penyesuaian gagal: {e}")),
+                Ok(false) => (),
+                Err(e) => st.set_label(&e),
             }
         });
         let mut u = update.clone();

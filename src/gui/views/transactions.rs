@@ -84,8 +84,21 @@ fn item_dialog(
                 for unit in &product.units {
                     u.add_choice(&unit.unit_name.replace('|', " "));
                 }
-                u.set_value(0);
-                if let Some(unit) = product.units.first() {
+                let index = if purchase {
+                    product
+                        .units
+                        .iter()
+                        .position(|u| u.unit_name.eq_ignore_ascii_case(&product.purchase_unit))
+                        .unwrap_or(0)
+                } else {
+                    product
+                        .units
+                        .iter()
+                        .position(|u| u.conversion_qty == 1)
+                        .unwrap_or(0)
+                };
+                u.set_value(index as i32);
+                if let Some(unit) = product.units.get(index) {
                     price.set_value(&format!(
                         "{:.2}",
                         if purchase {
@@ -214,17 +227,24 @@ fn choose_pending(
     win.set_color(T::BG_APP);
     text(24, 20, 592, 28, "Pilih transaksi pending", 20, true);
     let mut choice = Choice::new(24, 80, 592, 34, None);
-    for (id, payload) in &data {
+    for (_, payload) in &data {
         let description = if purchase {
             serde_json::from_str::<Purchase>(payload)
                 .map(|p| format!("{} • {} barang", p.invoice, p.lines.len()))
                 .unwrap_or_else(|_| "Data tidak terbaca".into())
         } else {
             serde_json::from_str::<Sale>(payload)
-                .map(|p| format!("{} • Rp {:.2}", p.invoice_no, p.subtotal))
+                .map(|p| {
+                    format!(
+                        "{} · {} obat · {}",
+                        p.invoice_no,
+                        p.items.len(),
+                        rupiah(p.grand_total)
+                    )
+                })
                 .unwrap_or_else(|_| "Data tidak terbaca".into())
         };
-        choice.add_choice(&format!("#{id} • {description}"));
+        choice.add_choice(&description.replace('|', " ").replace('/', " "));
     }
     choice.set_value(0);
     let mut status = text(
@@ -264,7 +284,7 @@ pub fn bind_cashier(view: &mut KasirView, pool: Option<Pool>, user: User) {
     let items = Rc::new(RefCell::new(Vec::<SaleItem>::new()));
     let invoice = Rc::new(RefCell::new(String::new()));
     let last = Rc::new(RefCell::new(None::<Sale>));
-    let pending_id = Rc::new(RefCell::new(None::<i32>));
+    let doctor_id = Rc::new(std::cell::Cell::new(None::<i32>));
     view.grid.set(vec![]);
     view.input_barcode.set_value("");
     view.lbl_grand_total.set_label("Rp 0");
@@ -297,26 +317,51 @@ pub fn bind_cashier(view: &mut KasirView, pool: Option<Pool>, user: User) {
     for (_, name, _, _) in &customers {
         customer.add_choice(&name.replace('|', " ").replace('/', " "));
     }
+    let salespeople = db::named_people(pool.as_ref(), "salespeople").unwrap_or_default();
+    view.salesperson.add_choice("Tidak dipilih");
+    for (_, name) in &salespeople {
+        view.salesperson
+            .add_choice(&name.replace('|', " ").replace('/', " "));
+    }
+    view.salesperson.set_value(0);
+    let mut invoice_display = view.invoice.clone();
+    *invoice.borrow_mut() = format!("PJ-{}-{}", chrono::Utc::now().timestamp_micros(), user.id);
+    invoice_display.set_value(&invoice.borrow());
     let mut due = view.due.clone();
     due.set_value(&(chrono::Local::now().date_naive() + chrono::Duration::days(30)).to_string());
     let mut credit_date = due.clone();
     let mut credit_label = view.due_label.clone();
+    let mut normal_sale = view.sale_type_label.clone();
     payment.set_callback(move |p| {
         if p.value() == 1 {
             credit_date.show();
             credit_label.show();
+            normal_sale.hide();
         } else {
             credit_date.hide();
             credit_label.hide();
+            normal_sale.show();
         }
     });
     let mut remove = view.btn_remove.clone();
+    view.btn_add_item.deactivate();
+    let percentage_mode = Rc::new(std::cell::Cell::new(false));
     let refresh = {
         let data = items.clone();
         let mut grid = view.grid.clone();
         let mut total = view.lbl_grand_total.clone();
+        let mut subtotal_label = view.lbl_subtotal.clone();
+        let mut save = view.btn_simpan.clone();
+        let mut pending_button = view.btn_pending.clone();
+        let mut print_button = view.btn_cetak.clone();
+        let saved = last.clone();
+        let connected = pool.is_some();
         let paid = view.input_bayar.clone();
         let mut change = view.lbl_kembali.clone();
+        let mut discount = view.discount.clone();
+        let shipping = view.shipping.clone();
+        let percent = view.discount_percent.clone();
+        let mode = percentage_mode.clone();
         move || {
             grid.set(
                 data.borrow()
@@ -340,7 +385,46 @@ pub fn bind_cashier(view: &mut KasirView, pool: Option<Pool>, user: User) {
                 .map(|i| i.subtotal)
                 .sum::<f64>()
                 .max(0.0);
+            subtotal_label.set_label(&format!("Subtotal {}", rupiah(sum)));
+            if mode.get() {
+                let value = operations::money(&percent.value()).unwrap_or(101.0);
+                discount.set_value(&format!("{:.2}", sum * value / 100.0));
+            }
+            let sum = match operations::money(&discount.value()).and_then(|d| {
+                operations::money(&shipping.value())
+                    .and_then(|s| crate::services::cart::invoice_total(sum, d, s))
+            }) {
+                Ok(v) => v,
+                Err(_) => {
+                    total.set_label("—");
+                    change.set_label("—");
+                    subtotal_label.set_label("Periksa diskon dan ongkos");
+                    save.deactivate();
+                    pending_button.deactivate();
+                    print_button.deactivate();
+                    return;
+                }
+            };
             total.set_label(&rupiah(sum));
+            if connected && !data.borrow().is_empty() {
+                save.activate();
+                pending_button.activate();
+                print_button.activate();
+                print_button.set_label("Cetak [F4]");
+                print_button.set_tooltip("Simpan penjualan lalu cetak struk");
+            } else {
+                save.deactivate();
+                pending_button.deactivate();
+                if connected && saved.borrow().is_some() {
+                    print_button.activate();
+                    print_button.set_label("Ulang struk [F4]");
+                    print_button
+                        .set_tooltip("Cetak ulang faktur terakhir tanpa menyimpan penjualan lagi");
+                } else {
+                    print_button.deactivate();
+                    print_button.set_label("Cetak [F4]");
+                }
+            }
             change.set_label(&rupiah(
                 (operations::money(&paid.value()).unwrap_or(0.0) - sum).max(0.0),
             ));
@@ -349,11 +433,101 @@ pub fn bind_cashier(view: &mut KasirView, pool: Option<Pool>, user: User) {
     view.input_bayar.set_trigger(CallbackTrigger::Changed);
     let mut r = refresh.clone();
     view.input_bayar.set_callback(move |_| r());
+    let mode = percentage_mode.clone();
+    let mut r = refresh.clone();
+    view.discount_percent.set_trigger(CallbackTrigger::Changed);
+    view.discount_percent.set_callback(move |_| {
+        mode.set(true);
+        r();
+    });
+    let mode = percentage_mode.clone();
+    let nominal = view.discount.clone();
+    let cart = items.clone();
+    let mut percent = view.discount_percent.clone();
+    let mut r = refresh.clone();
+    view.discount.set_trigger(CallbackTrigger::Changed);
+    view.discount.set_callback(move |_| {
+        mode.set(false);
+        let subtotal = cart.borrow().iter().map(|i| i.subtotal).sum::<f64>();
+        let discount = operations::money(&nominal.value()).unwrap_or(0.0);
+        percent.set_value(&format!(
+            "{:.2}",
+            if subtotal > 0.0 {
+                discount / subtotal * 100.0
+            } else {
+                0.0
+            }
+        ));
+        r();
+    });
+    let mut r = refresh.clone();
+    view.shipping.set_trigger(CallbackTrigger::Changed);
+    view.shipping.set_callback(move |_| r());
+    let selected = Rc::new(RefCell::new(Vec::<Product>::new()));
+    let select = {
+        let selected = selected.clone();
+        let product = view.product.clone();
+        let mut unit = view.unit.clone();
+        let mut price = view.price.clone();
+        let mut add = view.btn_add_item.clone();
+        move || {
+            unit.clear();
+            price.set_value("0");
+            add.deactivate();
+            if let Some(p) = selected.borrow().get(product.value().max(0) as usize) {
+                add.activate();
+                for u in &p.units {
+                    unit.add_choice(&u.unit_name.replace('|', " "));
+                }
+                let index = p
+                    .units
+                    .iter()
+                    .position(|u| u.conversion_qty == 1)
+                    .unwrap_or(0);
+                unit.set_value(index as i32);
+                if let Some(u) = p.units.get(index) {
+                    price.set_value(&u.sell_price.to_string());
+                    price.do_callback();
+                }
+            }
+        }
+    };
+    let mut on_select = select.clone();
+    view.product.set_callback(move |_| on_select());
+    let ps = selected.clone();
+    let name = view.product.clone();
+    let mut price = view.price.clone();
+    view.unit.set_callback(move |u| {
+        if let Some(p) = ps.borrow().get(name.value().max(0) as usize) {
+            if let Some(v) = p.units.get(u.value().max(0) as usize) {
+                price.set_value(&v.sell_price.to_string());
+                price.do_callback();
+            }
+        }
+    });
+    let line_preview = {
+        let qty = view.qty.clone();
+        let price = view.price.clone();
+        let discount = view.item_discount.clone();
+        let mut total = view.line_total.clone();
+        move || {
+            let n = operations::quantity(&qty.value()).unwrap_or(0);
+            let price = operations::money(&price.value()).unwrap_or(0.0);
+            let d = operations::money(&discount.value()).unwrap_or(0.0);
+            total.set_label(&rupiah((n as f64 * price * (1.0 - d / 100.0)).max(0.0)));
+        }
+    };
+    for field in [&mut view.qty, &mut view.price, &mut view.item_discount] {
+        field.set_trigger(CallbackTrigger::Changed);
+        let mut update = line_preview.clone();
+        field.set_callback(move |_| update());
+    }
     let append = {
         let data = items.clone();
         let mut r = refresh.clone();
         let mut barcode = view.input_barcode.clone();
         let mut st = view.status.clone();
+        let saved = last.clone();
         move |product: Product, line: PurchaseLine| -> Result<(), String> {
             crate::services::cart::add_sale_line(
                 &mut data.borrow_mut(),
@@ -361,9 +535,10 @@ pub fn bind_cashier(view: &mut KasirView, pool: Option<Pool>, user: User) {
                 &line,
                 &chrono::Local::now().date_naive().to_string(),
             )?;
+            *saved.borrow_mut() = None;
             r();
             st.set_label(&format!(
-                "{} ditambahkan. Scan berikutnya atau pilih Cari obat manual.",
+                "{} ditambahkan. Scan lagi atau cari nama di kolom kode.",
                 product.name
             ));
             barcode.set_value("");
@@ -374,15 +549,51 @@ pub fn bind_cashier(view: &mut KasirView, pool: Option<Pool>, user: User) {
             Ok(())
         }
     };
-    let p = pool.clone();
-    let query = view.input_barcode.clone();
-    let add = append.clone();
+    let mut append_manual = append.clone();
+    let ps = selected.clone();
+    let name = view.product.clone();
+    let unit = view.unit.clone();
+    let qty = view.qty.clone();
+    let price = view.price.clone();
+    let discount = view.item_discount.clone();
+    let mut st = view.status.clone();
     view.btn_add_item.set_callback(move |_| {
-        item_dialog(p.clone(), false, &query.value(), add.clone());
+        let result = (|| -> Result<(), String> {
+            let ps = ps.borrow();
+            let p = ps
+                .get(name.value().max(0) as usize)
+                .ok_or("Cari dan pilih obat terlebih dahulu")?;
+            let u = p
+                .units
+                .get(unit.value().max(0) as usize)
+                .ok_or("Pilih satuan")?;
+            let line = PurchaseLine {
+                product_id: p.id,
+                code: p.code.clone(),
+                name: p.name.clone(),
+                unit: u.unit_name.clone(),
+                conversion: u.conversion_qty,
+                qty: operations::quantity(&qty.value())?,
+                price: operations::money(&price.value())?,
+                discount: operations::money(&discount.value())?,
+                batch: "PENJUALAN".into(),
+                expiry: None,
+            };
+            append_manual(p.clone(), line)
+        })();
+        if let Err(e) = result {
+            st.set_label(&e);
+        }
     });
     let p = pool.clone();
-    let mut add = append;
+    let mut append_scan = append;
+    let ps = selected.clone();
+    let mut names = view.product.clone();
+    let mut select = select;
     let mut st = view.status.clone();
+    let mut qty = view.qty.clone();
+    let mut disc = view.item_discount.clone();
+    let mut preview = line_preview;
     view.input_barcode.set_trigger(CallbackTrigger::EnterKey);
     view.input_barcode.set_callback(move |query| {
         let value = query.value().trim().to_string();
@@ -390,39 +601,54 @@ pub fn bind_cashier(view: &mut KasirView, pool: Option<Pool>, user: User) {
             return;
         }
         let result = (|| -> Result<(), String> {
-            let products = db::view_products(p.as_ref(), Some(&value))?;
-            if products.is_empty() {
+            let data = db::view_products(p.as_ref(), Some(&value))?;
+            if data.is_empty() {
                 return Err("Obat atau barcode tidak ditemukan".into());
             }
-            if let Some(product) = products
-                .into_iter()
-                .find(|product| product.code.eq_ignore_ascii_case(&value))
-            {
-                let unit = product
+            let exact = data
+                .iter()
+                .find(|p| p.code.eq_ignore_ascii_case(&value))
+                .cloned();
+            names.clear();
+            for p in &data {
+                names.add_choice(&p.name.replace('|', " ").replace('/', " "));
+            }
+            *ps.borrow_mut() = data;
+            names.set_value(0);
+            qty.set_value("1");
+            disc.set_value("0");
+            select();
+            preview();
+            if let Some(product) = exact {
+                let u = product
                     .units
                     .iter()
                     .find(|u| u.conversion_qty == 1)
-                    .ok_or("Satuan dasar obat belum memiliki harga jual")?;
+                    .ok_or("Harga satuan dasar belum tersedia")?;
                 let line = PurchaseLine {
                     product_id: product.id,
                     code: product.code.clone(),
                     name: product.name.clone(),
-                    unit: unit.unit_name.clone(),
-                    conversion: unit.conversion_qty,
+                    unit: u.unit_name.clone(),
+                    conversion: u.conversion_qty,
                     qty: 1,
-                    price: unit.sell_price,
+                    price: u.sell_price,
                     discount: 0.0,
                     batch: "PENJUALAN".into(),
                     expiry: None,
                 };
-                add(product, line)?;
+                append_scan(product, line)?;
             } else {
-                item_dialog(p.clone(), false, &value, add.clone());
+                st.set_label("Pilih obat, jumlah dan satuan di baris input, lalu Tambah obat.");
             }
             Ok(())
         })();
         if let Err(e) = result {
             st.set_label(&e);
+            ps.borrow_mut().clear();
+            names.clear();
+            select();
+            preview();
             query.set_value("");
             let _ = query.take_focus();
         }
@@ -445,19 +671,51 @@ pub fn bind_cashier(view: &mut KasirView, pool: Option<Pool>, user: User) {
         let mut st = view.status.clone();
         let mut c = customer.clone();
         let mut pt = payment.clone();
-        let pending = pending_id.clone();
         let last = last.clone();
+        let mut discount = view.discount.clone();
+        let mut percent = view.discount_percent.clone();
+        let mut shipping = view.shipping.clone();
+        let mut draft = view.invoice.clone();
+        let mode = percentage_mode.clone();
+        let doctor_id = doctor_id.clone();
+        let mut sales = view.salesperson.clone();
+        let mut date = view.date.clone();
+        let mut names = view.product.clone();
+        let mut units = view.unit.clone();
+        let selected = selected.clone();
+        let mut code = view.input_barcode.clone();
+        let mut qty = view.qty.clone();
+        let mut price = view.price.clone();
+        let mut item_discount = view.item_discount.clone();
+        let mut line_total = view.line_total.clone();
+        let mut add = view.btn_add_item.clone();
         move || {
+            selected.borrow_mut().clear();
+            names.clear();
+            units.clear();
+            code.set_value("");
+            qty.set_value("1");
+            price.set_value("0");
+            item_discount.set_value("0");
+            line_total.set_label("Rp 0");
+            add.deactivate();
+            date.set_value(&chrono::Local::now().date_naive().to_string());
+            mode.set(false);
+            doctor_id.set(None);
+            sales.set_value(0);
+            discount.set_value("0");
+            percent.set_value("0");
+            shipping.set_value("0");
             data.borrow_mut().clear();
             paid.set_value("0");
             c.set_value(0);
             pt.set_value(0);
             pt.do_callback();
-            *pending.borrow_mut() = None;
             *last.borrow_mut() = None;
             st.set_label("");
             r();
-            invoice.borrow_mut().clear();
+            *invoice.borrow_mut() = format!("PJ-{}", chrono::Utc::now().timestamp_micros());
+            draft.set_value(&invoice.borrow());
         }
     };
     let data = items.clone();
@@ -483,6 +741,12 @@ pub fn bind_cashier(view: &mut KasirView, pool: Option<Pool>, user: User) {
         let pt = payment.clone();
         let c = customer.clone();
         let due = due.clone();
+        let date = view.date.clone();
+        let doctor_id = doctor_id.clone();
+        let salesperson = view.salesperson.clone();
+        let salespeople = salespeople.clone();
+        let discount = view.discount.clone();
+        let shipping = view.shipping.clone();
         move || -> Result<Sale, String> {
             let subtotal = data
                 .borrow()
@@ -491,6 +755,9 @@ pub fn bind_cashier(view: &mut KasirView, pool: Option<Pool>, user: User) {
                 .sum::<f64>()
                 .max(0.0);
             let paid = operations::money(&paid.value())?;
+            let discount = operations::money(&discount.value())?;
+            let shipping = operations::money(&shipping.value())?;
+            let total = crate::services::cart::invoice_total(subtotal, discount, shipping)?;
             let credit = pt.value() == 1;
             let customer = if c.value() > 0 {
                 customers.get((c.value() - 1) as usize).map(|r| r.0)
@@ -504,7 +771,11 @@ pub fn bind_cashier(view: &mut KasirView, pool: Option<Pool>, user: User) {
             Ok(Sale {
                 id: 0,
                 invoice_no: invoice.borrow().clone(),
-                sale_date: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+                sale_date: format!(
+                    "{} {}",
+                    operations::date(&date.value())?,
+                    chrono::Local::now().format("%H:%M:%S")
+                ),
                 payment_type: if credit { "KREDIT" } else { "TUNAI" }.into(),
                 due_date: if credit {
                     Some(operations::date(&due.value())?)
@@ -512,82 +783,161 @@ pub fn bind_cashier(view: &mut KasirView, pool: Option<Pool>, user: User) {
                     None
                 },
                 customer_id: customer,
-                doctor_id: None,
+                doctor_id: doctor_id.get(),
+                salesperson_id: salespeople
+                    .get((salesperson.value() - 1) as usize)
+                    .map(|r| r.0),
+                shipping,
                 operator_id: user.id,
                 subtotal,
-                discount: 0.0,
-                grand_total: subtotal,
+                discount,
+                grand_total: total,
                 paid_amount: paid,
-                change_amount: if credit {
-                    0.0
-                } else {
-                    (paid - subtotal).max(0.0)
-                },
+                change_amount: if credit { 0.0 } else { (paid - total).max(0.0) },
                 total_profit: 0.0,
                 items: data.borrow().clone(),
             })
         }
     };
-    let mut paid_after_save = view.input_bayar.clone();
-    let current_invoice = invoice.clone();
-    let p = pool.clone();
-    let build_save = build.clone();
-    let data = items.clone();
-    let saved = last.clone();
-    let pending = pending_id.clone();
-    let mut r = refresh.clone();
-    let mut st = view.status.clone();
-    view.btn_simpan.set_callback(move |_| {
-        let Some(p) = &p else {
-            return;
+    let preview_build = build.clone();
+    let saved_preview = last.clone();
+    let preview_items = items.clone();
+    let preview_pool = pool.clone();
+    let paper = view.paper.clone();
+    let mut st_preview = view.status.clone();
+    view.btn_preview.set_callback(move |_| {
+        let draft = !preview_items.borrow().is_empty();
+        let sale = if !draft {
+            saved_preview
+                .borrow()
+                .clone()
+                .map(Ok)
+                .unwrap_or_else(|| preview_build())
+        } else {
+            preview_build()
         };
-        match build_save().and_then(|sale| {
-            db::execute_sale_transaction_fefo(p, sale.clone())
-                .map(|_| sale)
-                .map_err(|e| e.to_string())
-        }) {
-            Ok(sale) => {
-                let invoice = sale.invoice_no.clone();
-                *saved.borrow_mut() = Some(sale);
-                data.borrow_mut().clear();
-                paid_after_save.set_value("0");
-                r();
-                st.set_label(&format!("Tersimpan: {invoice}"));
-                current_invoice.borrow_mut().clear();
-                if let Some(id) = pending.borrow_mut().take() {
-                    if let Err(e) = operations::delete_pending(p, user.id, false, id) {
-                        st.set_label(&format!("Faktur tersimpan. Pending gagal dihapus: {e}"));
-                    }
-                }
+        let result = sale.and_then(|sale| {
+            let settings = crate::services::documents::receipt_settings(
+                preview_pool.as_ref(),
+                &sale,
+                Some(if paper.value() == 1 { 80 } else { 58 }),
+            )?;
+            let mut html = crate::services::documents::receipt_html(&sale, &settings);
+            if draft {
+                html = html.replacen(
+                    "<table>",
+                    "<p><b>Pratinjau · transaksi belum disimpan</b></p><table>",
+                    1,
+                );
             }
-            Err(e) => st.set_label(&format!("Simpan gagal: {e}")),
+            crate::services::documents::open_html(&html)
+        });
+        if let Err(e) = result {
+            st_preview.set_label(&e);
         }
     });
+    let complete = {
+        let pool = pool.clone();
+        let data = items.clone();
+        let saved = last.clone();
+        let build = build.clone();
+        let mut clear = clear.clone();
+        let mut refresh = refresh.clone();
+        let mut status = view.status.clone();
+        let paper = view.paper.clone();
+        move |print_requested: bool| {
+            let Some(pool) = &pool else {
+                return;
+            };
+            let result = (|| -> Result<crate::services::cart::CheckoutResult, String> {
+                let draft = if data.borrow().is_empty() {
+                    None
+                } else {
+                    Some(build()?)
+                };
+                crate::services::cart::finish_sale(
+                    draft,
+                    saved.borrow().clone(),
+                    print_requested,
+                    |sale| db::save_sale_fefo(pool, sale.clone()).map_err(|e| e.to_string()),
+                    |sale| {
+                        crate::services::documents::print_receipt(
+                            pool,
+                            sale,
+                            if paper.value() == 1 { 80 } else { 58 },
+                        )
+                    },
+                )
+            })();
+            match result {
+                Ok(result) => {
+                    if result.saved_now {
+                        clear();
+                        *saved.borrow_mut() = Some(result.sale.clone());
+                        refresh();
+                    }
+                    let invoice = &result.sale.invoice_no;
+                    if let Some(error) = result.print_error {
+                        status.set_label(&format!(
+                            "Faktur {invoice} tersimpan; cetak gagal. F4 untuk mengulang struk."
+                        ));
+                        status.set_tooltip(&error);
+                    } else if print_requested {
+                        status.set_label(&format!(
+                            "Faktur {invoice} tersimpan. Struk dikirim ke proses cetak."
+                        ));
+                        status.set_tooltip("");
+                    } else {
+                        status.set_label(&format!(
+                            "Faktur {invoice} tersimpan. F4 untuk cetak struk."
+                        ));
+                        status.set_tooltip("");
+                    }
+                }
+                Err(error) => status.set_label(&format!("Transaksi belum selesai: {error}")),
+            }
+        }
+    };
+    let mut save = complete.clone();
+    view.btn_simpan.set_callback(move |_| save(false));
+    let mut print = complete;
+    view.btn_cetak.set_callback(move |_| print(true));
     let p = pool.clone();
+    let mut after_pending = clear.clone();
     let mut st = view.status.clone();
     view.btn_pending.set_callback(move |_| {
         let Some(p) = &p else {
             return;
         };
-        let result = build()
-            .and_then(|sale| {
-                if sale.items.is_empty() {
-                    return Err("Keranjang kosong".into());
-                }
-                serde_json::to_string(&sale).map_err(|e| e.to_string())
-            })
-            .and_then(|payload| operations::save_pending(p, user.id, false, &payload));
-        st.set_label(&match result {
-            Ok(()) => "Transaksi disimpan sebagai pending".into(),
-            Err(e) => format!("Pending gagal: {e}"),
+        let result = build().and_then(|sale| {
+            let payload = serde_json::to_string(&sale).map_err(|e| e.to_string())?;
+            operations::save_pending(p, user.id, false, &payload)?;
+            Ok(sale.invoice_no)
         });
+        match result {
+            Ok(invoice) => {
+                after_pending();
+                st.set_label(&format!(
+                    "Pending {invoice} disimpan. F7 untuk melanjutkan."
+                ));
+            }
+            Err(error) => st.set_label(&format!("Pending gagal: {error}")),
+        }
     });
     let p = pool.clone();
     let data = items.clone();
-    let pending = pending_id.clone();
     let paid = view.input_bayar.clone();
     let mut st = view.status.clone();
     let r = refresh.clone();
+    let saved_percent = view.discount_percent.clone();
+    let mode_pending = percentage_mode.clone();
+    let pending_last = last.clone();
+    let saved_discount = view.discount.clone();
+    let saved_shipping = view.shipping.clone();
+    let saved_date = view.date.clone();
+    let saved_invoice = view.invoice.clone();
+    let saved_doctor_id = doctor_id.clone();
+    let saved_sales = view.salesperson.clone();
     view.btn_buka_pending.set_callback(move |_| {
         let Some(p) = &p else {
             return;
@@ -599,17 +949,48 @@ pub fn bind_cashier(view: &mut KasirView, pool: Option<Pool>, user: User) {
         let invoice = invoice.clone();
         let customer_ids = customer_ids.clone();
         let data = data.clone();
-        let pending = pending.clone();
         let mut paid = paid.clone();
         let mut r = r.clone();
         let mut c = customer.clone();
         let mut pt = payment.clone();
         let mut d = due.clone();
-        if let Err(e) = choose_pending(p, user.id, false, move |id, payload| {
+        let mut percent = saved_percent.clone();
+        let mode = mode_pending.clone();
+        let pending_last = pending_last.clone();
+        let mut discount = saved_discount.clone();
+        let mut shipping = saved_shipping.clone();
+        let mut date = saved_date.clone();
+        let mut invoice_display = saved_invoice.clone();
+        let doctor_id = saved_doctor_id.clone();
+        let mut sales = saved_sales.clone();
+        let sales_ids = salespeople.iter().map(|v| v.0).collect::<Vec<_>>();
+        if let Err(e) = choose_pending(p, user.id, false, move |_id, payload| {
             let sale: Sale = serde_json::from_str(&payload).map_err(|e| e.to_string())?;
             *invoice.borrow_mut() = sale.invoice_no.clone();
+            invoice_display.set_value(&sale.invoice_no);
+            mode.set(false);
+            *pending_last.borrow_mut() = None;
+            percent.set_value(&format!(
+                "{:.2}",
+                if sale.subtotal > 0.0 {
+                    sale.discount / sale.subtotal * 100.0
+                } else {
+                    0.0
+                }
+            ));
+            discount.set_value(&sale.discount.to_string());
+            shipping.set_value(&sale.shipping.to_string());
+            if let Some(day) = sale.sale_date.get(..10) {
+                date.set_value(day);
+            }
+            doctor_id.set(sale.doctor_id);
+            sales.set_value(
+                sale.salesperson_id
+                    .and_then(|id| sales_ids.iter().position(|v| *v == id))
+                    .map(|i| i as i32 + 1)
+                    .unwrap_or(0),
+            );
             *data.borrow_mut() = sale.items;
-            *pending.borrow_mut() = Some(id);
             paid.set_value(&sale.paid_amount.to_string());
             pt.set_value(if sale.payment_type == "KREDIT" { 1 } else { 0 });
             pt.do_callback();
@@ -626,41 +1007,6 @@ pub fn bind_cashier(view: &mut KasirView, pool: Option<Pool>, user: User) {
             Ok(())
         }) {
             st.set_label(&e);
-        }
-    });
-    let p = pool.clone();
-    let saved = last.clone();
-    let mut st = view.status.clone();
-    view.btn_cetak.set_callback(move |_| {
-        let Some(sale) = saved.borrow().clone() else {
-            st.set_label("Simpan transaksi sebelum mencetak struk");
-            return;
-        };
-        let values = p
-            .as_ref()
-            .map(operations::settings)
-            .transpose()
-            .ok()
-            .flatten()
-            .unwrap_or_default();
-        let settings = crate::hardware::ReceiptSettings {
-            store_name: values
-                .get("store_name")
-                .cloned()
-                .unwrap_or_else(|| "Apotek".into()),
-            address: values.get("store_address").cloned().unwrap_or_default(),
-            phone: values.get("store_phone").cloned().unwrap_or_default(),
-            header_note: values.get("receipt_header").cloned().unwrap_or_default(),
-            footer_note: values.get("receipt_footer").cloned().unwrap_or_default(),
-            paper_width: values
-                .get("receipt_paper_width")
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(58),
-            printer_name: values.get("printer_name").cloned().unwrap_or_default(),
-        };
-        let bytes = crate::hardware::generate_escpos_bytes(&sale, &settings);
-        if let Err(e) = crate::hardware::print_raw_to_spooler(&settings.printer_name, &bytes) {
-            st.set_label(&format!("Cetak gagal: {e}"));
         }
     });
     if pool.is_none() {
@@ -723,7 +1069,6 @@ pub fn bind_cashier(view: &mut KasirView, pool: Option<Pool>, user: User) {
 
 pub fn bind_purchase(view: &mut PembelianView, pool: Option<Pool>, user: User) {
     let lines = Rc::new(RefCell::new(Vec::<PurchaseLine>::new()));
-    let pending_id = Rc::new(RefCell::new(None::<i32>));
     view.grid.set(vec![]);
     view.input_faktur.set_value("");
     view.input_tempo
@@ -762,6 +1107,9 @@ pub fn bind_purchase(view: &mut PembelianView, pool: Option<Pool>, user: User) {
         let mut grid = view.grid.clone();
         let mut sub = view.lbl_subtotal.clone();
         let mut total = view.lbl_grand_total.clone();
+        let mut save_button = view.btn_simpan.clone();
+        let mut pending_button = pending.clone();
+        let connected = pool.is_some();
         move || {
             grid.set(
                 data.borrow()
@@ -789,6 +1137,13 @@ pub fn bind_purchase(view: &mut PembelianView, pool: Option<Pool>, user: User) {
             let result = (sum - operations::money(&disc.value()).unwrap_or(0.0))
                 * (1.0 + operations::money(&tax.value()).unwrap_or(0.0) / 100.0);
             total.set_label(&rupiah(result));
+            if connected && !data.borrow().is_empty() {
+                save_button.activate();
+                pending_button.activate();
+            } else {
+                save_button.deactivate();
+                pending_button.deactivate();
+            }
         }
     };
     let mut r = refresh.clone();
@@ -860,13 +1215,11 @@ pub fn bind_purchase(view: &mut PembelianView, pool: Option<Pool>, user: User) {
         let data = lines.clone();
         let mut invoice = view.input_faktur.clone();
         let mut r = refresh.clone();
-        let pid = pending_id.clone();
         move || {
             data.borrow_mut().clear();
             invoice.set_value("");
             disc.set_value("0");
             tax.set_value("0");
-            *pid.borrow_mut() = None;
             r();
         }
     };
@@ -887,7 +1240,6 @@ pub fn bind_purchase(view: &mut PembelianView, pool: Option<Pool>, user: User) {
     let p = pool.clone();
     let b = build.clone();
     let mut c = clear.clone();
-    let pid = pending_id.clone();
     let mut st = status.clone();
     view.btn_simpan.set_callback(move |_| {
         let Some(p) = &p else {
@@ -897,40 +1249,36 @@ pub fn bind_purchase(view: &mut PembelianView, pool: Option<Pool>, user: User) {
             .and_then(|purchase| operations::save_purchase(p, &purchase).map(|_| purchase.invoice))
         {
             Ok(invoice) => {
-                let id = pid.borrow_mut().take();
                 c();
                 st.set_label(&format!("Faktur {invoice} tersimpan"));
-                if let Some(id) = id {
-                    if let Err(e) = operations::delete_pending(p, user.id, true, id) {
-                        st.set_label(&format!("Faktur tersimpan. Pending gagal dihapus: {e}"));
-                    }
-                }
             }
             Err(e) => st.set_label(&format!("Simpan gagal: {e}")),
         }
     });
     let p = pool.clone();
+    let mut after_pending = clear.clone();
     let mut st = status.clone();
     pending.set_callback(move |_| {
         let Some(p) = &p else {
             return;
         };
-        let result = build()
-            .and_then(|purchase| {
-                if purchase.lines.is_empty() {
-                    return Err("Keranjang kosong".into());
-                }
-                serde_json::to_string(&purchase).map_err(|e| e.to_string())
-            })
-            .and_then(|payload| operations::save_pending(p, user.id, true, &payload));
-        st.set_label(&match result {
-            Ok(()) => "Pembelian disimpan sebagai pending".into(),
-            Err(e) => format!("Pending gagal: {e}"),
+        let result = build().and_then(|purchase| {
+            let payload = serde_json::to_string(&purchase).map_err(|e| e.to_string())?;
+            operations::save_pending(p, user.id, true, &payload)?;
+            Ok(purchase.invoice)
         });
+        match result {
+            Ok(invoice) => {
+                after_pending();
+                st.set_label(&format!(
+                    "Pending pembelian {invoice} disimpan. F7 untuk melanjutkan."
+                ));
+            }
+            Err(error) => st.set_label(&format!("Pending gagal: {error}")),
+        }
     });
     let p = pool.clone();
     let data = lines.clone();
-    let pid = pending_id.clone();
     let mut st = status.clone();
     let r = refresh.clone();
     let invoice = view.input_faktur.clone();
@@ -953,13 +1301,12 @@ pub fn bind_purchase(view: &mut PembelianView, pool: Option<Pool>, user: User) {
         let supplier_ids = supplier_ids.clone();
         let mut supplier = supplier.clone();
         let data = data.clone();
-        let pid = pid.clone();
         let mut r = r.clone();
         let mut invoice = invoice.clone();
         let mut pt = pt.clone();
         let mut dt = dt.clone();
         let mut due = due.clone();
-        if let Err(e) = choose_pending(p, user.id, true, move |id, payload| {
+        if let Err(e) = choose_pending(p, user.id, true, move |_id, payload| {
             let purchase: Purchase = serde_json::from_str(&payload).map_err(|e| e.to_string())?;
             disc.set_value(&purchase.discount.to_string());
             tax.set_value(&purchase.tax_percent.to_string());
@@ -971,7 +1318,6 @@ pub fn bind_purchase(view: &mut PembelianView, pool: Option<Pool>, user: User) {
                     .unwrap_or(0),
             );
             *data.borrow_mut() = purchase.lines;
-            *pid.borrow_mut() = Some(id);
             invoice.set_value(&purchase.invoice);
             pt.set_value(if purchase.credit { 1 } else { 0 });
             dt.set_value(&purchase.purchase_date);

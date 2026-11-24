@@ -76,6 +76,10 @@ fn editor(
                 }),
         ));
     }
+    if let Some(index) = columns.iter().position(|column| *column == "notes") {
+        inputs[index].set_type(InputType::Multiline);
+        inputs[index].resize(24, 44 + index as i32 * 76, 612, 66);
+    }
     if account {
         let mut password = input(
             24,
@@ -99,8 +103,9 @@ fn editor(
     let mut w = win.clone();
     save.set_callback(move |_|{
         let result=(||->Result<(),String>{
-            let values=inputs.iter().take(columns.len()).map(|i|i.value().trim().to_string()).collect::<Vec<_>>();
-            if values.first().map(|s|s.is_empty()).unwrap_or(true){return Err("Nama / username wajib diisi".into());}
+            let mut values=inputs.iter().take(columns.len()).map(|i|i.value().trim().to_string()).collect::<Vec<_>>();
+            if table=="suppliers"{if values[1].is_empty(){return Err("Nama suplier wajib diisi".into());}if values[0].is_empty(){let value:u64=pool.get_conn().and_then(|mut c|c.query_first("SELECT UUID_SHORT()")).map_err(|e|e.to_string())?.ok_or("Kode tidak dapat dibuat")?;values[0]=format!("SUP-{value}");}}
+            else if values.first().map(|s|s.is_empty()).unwrap_or(true){return Err("Nama / username wajib diisi".into());}
             if account{
                 if values[1].is_empty()||!matches!(values[2].as_str(),"ADMIN"|"KASIR"|"GUDANG")||!matches!(values[3].as_str(),"0"|"1"){return Err("Isi nama, role ADMIN/KASIR/GUDANG, dan status 0/1".into());}
             }
@@ -145,7 +150,12 @@ impl MasterSimpleView {
         let mut add = button(984, 24, 188, "Tambah", true);
         let mut edit = button(28, 552, 160, "Edit data terpilih", false);
         let mut headers = vec!["ID"];
-        headers.extend(labels.clone());
+        headers.extend(
+            labels
+                .iter()
+                .map(|label| label.split(" (").next().unwrap_or(label))
+                .collect::<Vec<_>>(),
+        );
         let grid = Grid::new(28, 166, 1144, 358, &headers);
         let status = text(28, 592, 1144, 18, "", 12, false);
         let mut deactivate = button(204, 552, 200, "Nonaktifkan", false);
@@ -164,7 +174,25 @@ impl MasterSimpleView {
                 let result = if let Some(p) = &pool {
                     rows(p, table, &columns)
                 } else {
-                    Ok(db::demo::master_rows(table))
+                    let mut data = db::demo::master_rows(table);
+                    if table == "suppliers" {
+                        data = data
+                            .into_iter()
+                            .map(|r| {
+                                vec![
+                                    r[0].clone(),
+                                    format!("SUP-{}", r[0]),
+                                    r[1].clone(),
+                                    r[2].clone(),
+                                    r[3].clone(),
+                                    String::new(),
+                                    String::new(),
+                                    String::new(),
+                                ]
+                            })
+                            .collect();
+                    }
+                    Ok(data)
                 };
                 match result {
                     Ok(data) => {
@@ -252,6 +280,65 @@ impl MasterSimpleView {
                 Err(e) => st.set_label(&format!("Gagal menonaktifkan: {e}")),
             }
         });
+        if table == "suppliers" {
+            let mut export = button(820, 552, 160, "Ekspor Excel", false);
+            let mut import = button(996, 552, 176, "Impor Excel", false);
+            if pool.is_none() {
+                disable(&mut import);
+            }
+            let data = grid.rows.clone();
+            let mut st = status.clone();
+            export.set_callback(move |_| {
+                if let Some(path) = save_path("Ekspor suplier", "Excel\t*.xlsx") {
+                    let rows = data
+                        .borrow()
+                        .iter()
+                        .map(|r| r[1..].to_vec())
+                        .collect::<Vec<_>>();
+                    match crate::services::excel::export_rows(
+                        &[
+                            "Kode",
+                            "Nama",
+                            "Telepon",
+                            "Alamat",
+                            "Email",
+                            "Rekening",
+                            "Keterangan",
+                        ],
+                        &rows,
+                        &path,
+                    ) {
+                        Ok(()) => st.set_label("Suplier diekspor"),
+                        Err(e) => st.set_label(&e),
+                    }
+                }
+            });
+            let p = pool.clone();
+            let mut st = status.clone();
+            let mut u = update.clone();
+            import.set_callback(move |_| {
+                let Some(p) = &p else {
+                    return;
+                };
+                let mut chooser =
+                    fltk::dialog::NativeFileChooser::new(fltk::dialog::FileDialogType::BrowseFile);
+                chooser.set_filter("Excel\t*.{xlsx,xls}");
+                chooser.show();
+                let path = chooser.filename();
+                if path.as_os_str().is_empty() {
+                    return;
+                }
+                let result = crate::services::excel::supplier_rows(&path)
+                    .and_then(|rows| db::import_suppliers(p, &rows).map_err(|e| e.to_string()));
+                match result {
+                    Ok(()) => {
+                        u();
+                        st.set_label("Suplier diimpor");
+                    }
+                    Err(e) => st.set_label(&format!("Impor dibatalkan: {e}")),
+                }
+            });
+        }
         let mut u = update.clone();
         win.handle(move |_, event| {
             if event == fltk::enums::Event::Show {
@@ -269,8 +356,33 @@ impl MasterSimpleView {
             pool,
             "suppliers",
             "Suplier",
+            vec![
+                "code",
+                "name",
+                "phone",
+                "address",
+                "email",
+                "bank_account",
+                "notes",
+            ],
+            vec![
+                "Kode (kosong: otomatis)",
+                "Nama suplier",
+                "Telepon",
+                "Alamat",
+                "Email",
+                "Rekening",
+                "Keterangan",
+            ],
+        )
+    }
+    pub fn sales(pool: Option<Pool>) -> Self {
+        Self::build(
+            pool,
+            "salespeople",
+            "Sales",
             vec!["name", "phone", "address"],
-            vec!["Nama suplier", "Telepon", "Alamat"],
+            vec!["Nama Sales", "Telepon", "Alamat"],
         )
     }
     pub fn pelanggan(pool: Option<Pool>) -> Self {
@@ -282,15 +394,7 @@ impl MasterSimpleView {
             vec!["Nama pelanggan", "Telepon", "Alamat"],
         )
     }
-    pub fn dokter(pool: Option<Pool>) -> Self {
-        Self::build(
-            pool,
-            "doctors",
-            "Dokter rekanan",
-            vec!["name", "sip_no"],
-            vec!["Nama dokter", "Nomor SIP"],
-        )
-    }
+
     pub fn karyawan(pool: Option<Pool>) -> Self {
         Self::build(
             pool,

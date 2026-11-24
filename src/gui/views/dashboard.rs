@@ -164,7 +164,9 @@ impl DashboardView {
         let mut warnings = Vec::new();
         for i in 0..3 {
             let x = 28 + i * 382;
-            panel(x, 226, 364, 48);
+            if i == 0 {
+                panel(28, 226, 1144, 48);
+            }
             warnings.push(text(x + 16, 238, 332, 24, "", 13, true));
         }
         text(28, 296, 800, 26, "Penjualan harian", 16, true);

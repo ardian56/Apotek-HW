@@ -1,7 +1,48 @@
 use crate::{
     db::operations::PurchaseLine,
-    models::{Product, SaleItem},
+    models::{Product, Sale, SaleItem},
 };
+
+pub struct CheckoutResult {
+    pub sale: Sale,
+    pub saved_now: bool,
+    pub print_error: Option<String>,
+}
+
+pub fn finish_sale(
+    draft: Option<Sale>,
+    saved: Option<Sale>,
+    print_requested: bool,
+    persist: impl FnOnce(&Sale) -> Result<Sale, String>,
+    print: impl FnOnce(&Sale) -> Result<(), String>,
+) -> Result<CheckoutResult, String> {
+    let (sale, saved_now) = if let Some(sale) = draft {
+        crate::db::operations::validate_sale(&sale)?;
+        (persist(&sale)?, true)
+    } else {
+        (saved.ok_or("Tambahkan obat terlebih dahulu")?, false)
+    };
+    let print_error = if print_requested {
+        print(&sale).err()
+    } else {
+        None
+    };
+    Ok(CheckoutResult {
+        sale,
+        saved_now,
+        print_error,
+    })
+}
+
+pub fn invoice_total(subtotal: f64, discount: f64, shipping: f64) -> Result<f64, String> {
+    for amount in [subtotal, discount, shipping] {
+        crate::db::operations::money(&amount.to_string())?;
+    }
+    if discount > subtotal {
+        return Err("Diskon faktur melebihi subtotal".into());
+    }
+    crate::db::operations::money(&(subtotal - discount + shipping).to_string())
+}
 
 pub fn add_sale_line(
     items: &mut Vec<SaleItem>,
@@ -80,7 +121,69 @@ mod tests {
     use crate::models::{ProductBatch, ProductUnit};
 
     #[test]
+    fn checkout_saves_before_print_and_retries_without_saving_again() {
+        let events = std::cell::RefCell::new(Vec::new());
+        let outcome = finish_sale(
+            Some(crate::db::demo::sales()[0].clone()),
+            None,
+            true,
+            |sale| {
+                events.borrow_mut().push("save");
+                let mut saved = sale.clone();
+                saved.items[0].product_name = "Nama dari server".into();
+                Ok(saved)
+            },
+            |sale| {
+                assert_eq!(sale.items[0].product_name, "Nama dari server");
+                events.borrow_mut().push("print");
+                Err("Printer offline".into())
+            },
+        )
+        .unwrap();
+        assert_eq!(*events.borrow(), vec!["save", "print"]);
+        assert!(outcome.saved_now);
+        assert_eq!(outcome.print_error.as_deref(), Some("Printer offline"));
+        let retry = finish_sale(
+            None,
+            Some(outcome.sale),
+            true,
+            |_| panic!("Printing again must not save another sale"),
+            |_| {
+                events.borrow_mut().push("retry");
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert!(!retry.saved_now);
+        assert!(retry.print_error.is_none());
+        let mut unpaid = crate::db::demo::sales()[0].clone();
+        unpaid.paid_amount = 0.0;
+        unpaid.change_amount = 0.0;
+        assert!(finish_sale(
+            Some(unpaid),
+            None,
+            true,
+            |_| panic!("Unpaid cash sale must not be saved"),
+            |_| panic!("Unpaid cash sale must not be printed")
+        )
+        .is_err());
+        let only_save = finish_sale(
+            Some(crate::db::demo::sales()[0].clone()),
+            None,
+            false,
+            |sale| Ok(sale.clone()),
+            |_| panic!("F3 must not print"),
+        )
+        .unwrap();
+        assert!(only_save.saved_now);
+        assert!(only_save.print_error.is_none());
+    }
+
+    #[test]
     fn scans_merge_and_respect_stock_across_units_and_expiry() {
+        assert_eq!(invoice_total(10000.0, 1000.0, 2500.0).unwrap(), 11500.0);
+        assert!(invoice_total(100.0, 101.0, 0.0).is_err());
+        assert!(invoice_total(100.0, 0.0, f64::NAN).is_err());
         let product = Product {
             id: 1,
             code: "000123".into(),
@@ -88,6 +191,7 @@ mod tests {
             category: "Umum".into(),
             supplier_id: None,
             base_unit: "Tablet".into(),
+            purchase_unit: "Tablet".into(),
             min_stock: 0,
             buy_price: 100.0,
             is_active: true,

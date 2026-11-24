@@ -251,6 +251,7 @@ fn catalog() -> Vec<Product> {
                 category: (*category).into(),
                 supplier_id: Some(i as i32 % 2 + 1),
                 base_unit: (*base).into(),
+                purchase_unit: (*base).into(),
                 min_stock: *min,
                 buy_price: *buy,
                 is_active: true,
@@ -323,6 +324,8 @@ pub fn sales() -> Vec<Sale> {
                 },
                 customer_id: Some(*customer),
                 doctor_id: None,
+                salesperson_id: None,
+                shipping: 0.0,
                 operator_id: 1,
                 subtotal: total,
                 discount: 0.0,
@@ -635,6 +638,34 @@ pub fn report(kind: ReportKind, from: &str, to: &str) -> Vec<Vec<String>> {
                 })
                 .collect()
         }
+        ReportKind::ProductSales => sales
+            .iter()
+            .filter(|s| s.id != 9)
+            .flat_map(|s| {
+                s.items.iter().map(|i| {
+                    vec![
+                        i.product_id.to_string(),
+                        i.product_code.clone(),
+                        i.product_name.clone(),
+                        s.invoice_no.clone(),
+                        s.sale_date[..10].to_string(),
+                        i.sell_price.to_string(),
+                        i.qty.to_string(),
+                        i.unit_name.clone(),
+                        i.subtotal.to_string(),
+                        (i.subtotal
+                            - i.qty_in_base as f64
+                                * products()
+                                    .iter()
+                                    .find(|p| p.id == i.product_id)
+                                    .map(|p| p.buy_price)
+                                    .unwrap_or(0.0))
+                        .to_string(),
+                        "Pelanggan contoh".into(),
+                    ]
+                })
+            })
+            .collect(),
         ReportKind::TopProducts => {
             let mut sums = BTreeMap::<i32, (i32, f64)>::new();
             for s in sales.iter().take(8).filter(|s| visible(&s.sale_date)) {
@@ -698,6 +729,25 @@ pub fn report(kind: ReportKind, from: &str, to: &str) -> Vec<Vec<String>> {
     };
     if matches!(kind, ReportKind::Payments | ReportKind::Returns) {
         rows.retain(|r| visible(&r[3]));
+    }
+    if kind == ReportKind::Sales {
+        for row in &mut rows {
+            if let Some(s) = row
+                .first()
+                .and_then(|v| v.parse::<i32>().ok())
+                .and_then(|id| sales.iter().find(|s| s.id == id))
+            {
+                row.extend([
+                    s.sale_date[11..16].into(),
+                    s.payment_type.clone(),
+                    s.due_date.clone().unwrap_or_default(),
+                    String::new(),
+                    String::new(),
+                    s.total_profit.to_string(),
+                    "Master".into(),
+                ]);
+            }
+        }
     }
     rows
 }
@@ -876,7 +926,8 @@ pub fn seed(pool: &Pool) -> Result<(), String> {
                     name: p.name,
                     category: p.category,
                     supplier_id: Some(suppliers[p.supplier_id.unwrap() as usize - 1]),
-                    base_unit: p.base_unit,
+                    base_unit: p.base_unit.clone(),
+                    purchase_unit: p.base_unit,
                     min_stock: p.min_stock,
                     buy_price: p.buy_price,
                     units: p

@@ -14,3 +14,7 @@ pub mod transactions;
 
 pub use app_shell::*;
 pub use login::*;
+
+pub mod barcode_labels;
+
+pub mod import_products;

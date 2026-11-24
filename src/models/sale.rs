@@ -9,6 +9,10 @@ pub struct Sale {
     pub due_date: Option<String>,
     pub customer_id: Option<i32>,
     pub doctor_id: Option<i32>,
+    #[serde(default)]
+    pub salesperson_id: Option<i32>,
+    #[serde(default)]
+    pub shipping: f64,
     pub operator_id: i32,
     pub subtotal: f64,
     pub discount: f64,
