@@ -61,13 +61,29 @@ def windows():
     return result
 
 
-def window_height(title):
+def window_geometry(title):
     root = ctypes.c_ulong()
     x, y = ctypes.c_int(), ctypes.c_int()
     width, height, border, depth = [ctypes.c_uint() for _ in range(4)]
     x11.XGetGeometry(display, windows()[title], ctypes.byref(root), ctypes.byref(x), ctypes.byref(y),
         ctypes.byref(width), ctypes.byref(height), ctypes.byref(border), ctypes.byref(depth))
-    return height.value
+    return x.value, y.value, width.value, height.value
+
+
+def window_click(title, px, py, button=1):
+    x, y, width, _ = window_geometry(title)
+    click(x + (width + px if px < 0 else px), y + py, button=button)
+
+
+def window_pixels(image, title, px, py, width, height):
+    x, y, _, _ = window_geometry(title)
+    return pixels(image, f"{width}x{height}+{x + px}+{y + py}")
+
+
+def decode_preview(name):
+    screenshot(name)
+    decoded = subprocess.check_output(["zbarimg", "--quiet", "--raw", "--nodbus", "-Sdisable", "-Scode128.enable", f"/tmp/apotek-pos-{name}.png"], text=True)
+    return set(decoded.splitlines())
 
 
 def screenshot(name):
@@ -115,26 +131,102 @@ with tempfile.TemporaryDirectory(prefix="apotek-pos-test-") as directory:
         assert pixels(manual,cart_region(580,28))!=pixels(second,cart_region(580,28)),"Inline quantity did not apply"
         page_click(75,509);key("BackSpace");key("1");key("0");page_click(384,509);key("BackSpace");key("5");key("0");key("0")
         key("F2");key("BackSpace");scan("5000");screenshot("invoice-discount")
-        page_click(838,569);html=document();assert "Paracetamol 500 mg" in html;assert "Rp 4.550" in html,"Invoice discount or shipping is wrong"
-        screenshot("receipt-preview")
+        page_click(838,569);time.sleep(0.25)
+        assert "Pratinjau struk" in windows(),"Receipt did not stay inside the app"
+        assert not uri_file.exists(),"Receipt unexpectedly opened the browser"
+        screenshot("receipt-preview");key("Escape");time.sleep(0.2)
         navigate("Obat");master=screenshot("master");assert len(set(pixels(master,master_ed_region())))>1,"ED missing"
         row_click(0)
         shift=x11.XKeysymToKeycode(display,x11.XStringToKeysym(b"Shift_L"));xtest.XTestFakeKeyEvent(display,shift,1,0);x11.XFlush(display)
         row_click(4);xtest.XTestFakeKeyEvent(display,shift,0,0);x11.XFlush(display)
         row_click(4,button=3);screenshot("context");key("Down");key("Down");key("Down");key("Return");time.sleep(0.25)
-        assert "Label barcode" in windows(),"Barcode menu did not open";screenshot("barcode-queue");click(100,481);labels=document()
-        assert labels.count("<article class=label>")==5,"Selected medicines did not enter label queue"
-        for code in ["CTH-001","CTH-002","CTH-003","CTH-004","CTH-005"]:assert code in labels
-        assert "Rp 900" in labels and "3,50.0mm" not in labels
-        click(300,228);xtest.XTestFakeKeyEvent(display,shift,1,0);x11.XFlush(display);click(300,260);xtest.XTestFakeKeyEvent(display,shift,0,0);x11.XFlush(display)
-        click(742,290);key("BackSpace");key("2");click(830,335);click(100,481);labels=document()
-        assert labels.count("<article class=label>")==7,"Label count did not apply to selected medicine"
+        assert "Cetak barcode" in windows(),"Barcode menu did not open";screenshot("barcode-queue")
+        window_click("Cetak barcode",300,190)
+        before_append = screenshot("barcode-before-append")
+        before_add = window_pixels(screenshot("barcode-before-add"),"Cetak barcode",24,490,500,20)
+        window_click("Cetak barcode",840,35);time.sleep(0.25)
+        assert "Pilih banyak obat" in windows(),"Tambah obat failed to open the picker"
+        window_click("Pilih banyak obat",150,105);scan("cth-016")
+        window_click("Pilih banyak obat",150,154)
+        window_click("Pilih banyak obat",650,455);time.sleep(0.2)
+        assert "Pilih banyak obat" not in windows(),"Chosen medicine did not enter the queue"
+        assert window_pixels(screenshot("barcode-after-add"),"Cetak barcode",24,490,500,20) != before_add,"Tambah obat did not update label queue"
+        xtest.XTestFakeKeyEvent(display,shift,1,0);x11.XFlush(display);window_click("Cetak barcode",300,222);xtest.XTestFakeKeyEvent(display,shift,0,0);x11.XFlush(display)
+        assert window_pixels(screenshot("barcode-append-selection"),"Cetak barcode",600,147,40,24) == window_pixels(before_append,"Cetak barcode",600,147,40,24),"Adding medicine moved Shift anchor to first row"
+        window_click("Cetak barcode",874,461);time.sleep(0.25)
+        assert "Pratinjau lembar barcode" in windows(),"Mass barcode sheet preview did not open"
+        expected = {f"CTH-{i:03}" for i in range(1,6)} | {"CTH-016"}
+        assert expected <= decode_preview("barcode-sheet"),"Medicine barcodes missing from native sheet"
+        window_click("Pratinjau lembar barcode",-90,35);key("Home");key("Down");key("Return");time.sleep(0.2)
+        assert expected <= decode_preview("barcode-sheet-zoom"),"Zoom lost barcodes from native sheet"
+        assert not uri_file.exists(),"Barcode preview unexpectedly opened the browser"
+        before_dialog = set(windows())
+        window_click("Pratinjau lembar barcode",-114,window_geometry("Pratinjau lembar barcode")[3]-31);time.sleep(0.3)
+        assert set(windows()) - before_dialog,"Native print dialog did not open"
+        assert not uri_file.exists(),"Barcode print unexpectedly opened the browser"
+        key("Escape");time.sleep(0.2);key("Escape");time.sleep(0.2)
+        before_qty = screenshot("barcode-before-quantity")
+        window_click("Cetak barcode",300,158);xtest.XTestFakeKeyEvent(display,shift,1,0);x11.XFlush(display);window_click("Cetak barcode",300,190);xtest.XTestFakeKeyEvent(display,shift,0,0);x11.XFlush(display)
+        window_click("Cetak barcode",742,269);key("BackSpace");key("2");window_click("Cetak barcode",830,315)
+        after_qty = screenshot("barcode-after-quantity")
+        assert window_pixels(before_qty,"Cetak barcode",600,147,40,24) != window_pixels(after_qty,"Cetak barcode",600,147,40,24),"Quantity did not change in label queue"
+        window_click("Cetak barcode",300,158)
+        control=x11.XKeysymToKeycode(display,x11.XStringToKeysym(b"Control_L"))
+        xtest.XTestFakeKeyEvent(display,control,1,0);x11.XFlush(display);window_click("Cetak barcode",300,222);xtest.XTestFakeKeyEvent(display,control,0,0);x11.XFlush(display)
+        before_ctrl=screenshot("barcode-before-ctrl-quantity")
+        window_click("Cetak barcode",742,269);key("BackSpace");key("3");window_click("Cetak barcode",830,315)
+        after_ctrl=screenshot("barcode-after-ctrl-quantity")
+        for y in [147,211]:
+            assert window_pixels(before_ctrl,"Cetak barcode",600,y,40,24) != window_pixels(after_ctrl,"Cetak barcode",600,y,40,24),"Ctrl-selected quantity did not change"
+        assert window_pixels(before_ctrl,"Cetak barcode",600,179,40,24) == window_pixels(after_ctrl,"Cetak barcode",600,179,40,24),"Ctrl changed an unselected row"
+        window_click("Cetak barcode",300,190)
+        xtest.XTestFakeKeyEvent(display,shift,1,0);x11.XFlush(display);window_click("Cetak barcode",300,190);xtest.XTestFakeKeyEvent(display,shift,0,0);x11.XFlush(display)
+        before_single=screenshot("barcode-before-single-shift")
+        window_click("Cetak barcode",742,269);key("BackSpace");key("4");window_click("Cetak barcode",830,315)
+        after_single=screenshot("barcode-after-single-shift")
+        for y in [147,211]:
+            assert window_pixels(before_single,"Cetak barcode",600,y,40,24) == window_pixels(after_single,"Cetak barcode",600,y,40,24),"Shift-click on same row selected extra medicines"
+        assert window_pixels(before_single,"Cetak barcode",600,179,40,24) != window_pixels(after_single,"Cetak barcode",600,179,40,24),"Single selected quantity did not change"
+        window_click("Cetak barcode",874,461);time.sleep(0.2)
+        decoded = decode_preview("barcode-quantity-sheet")
+        for _ in range(24):window_click("Pratinjau lembar barcode",400,300,button=5)
+        decoded |= decode_preview("barcode-quantity-sheet-bottom")
+        assert expected <= decoded,"Quantity change lost medicines from sheet"
+        key("Escape");time.sleep(0.2)
+        window_click("Cetak barcode",106,461);time.sleep(0.2)
+        window_click("Cetak barcode",840,35);time.sleep(0.25)
+        assert "Pilih banyak obat" in windows(),"Multiple-medicine picker did not open"
+        window_click("Pilih banyak obat",90,455)
+        window_click("Pilih banyak obat",650,455);time.sleep(0.2)
+        all_status = window_pixels(screenshot("barcode-all"),"Cetak barcode",24,490,500,20)
+        window_click("Cetak barcode",840,35);time.sleep(0.2)
+        window_click("Pilih banyak obat",90,455);window_click("Pilih banyak obat",650,455);time.sleep(0.2)
+        assert window_pixels(screenshot("barcode-all-repeat"),"Cetak barcode",24,490,500,20) == all_status,"Picking the same medicines duplicated labels"
+        assert not uri_file.exists(),"Barcode queue unexpectedly opened browser"
         key("Escape");time.sleep(0.2);row_click(4,button=3);key("Down");key("Down");key("Return");time.sleep(0.25)
         assert "Kartu stok obat" in windows();screenshot("stock-card");key("Escape");time.sleep(0.2)
         row_click(4,button=3)
         for _ in range(4):key("Down")
         key("Return");time.sleep(0.25);assert "Batch dan ED obat" in windows();screenshot("batch-ed");key("Escape")
-        navigate("Penjualan");screenshot("history");page_click(872,41);key("Down");key("Return");receipt=document();assert "Faktur:" in receipt,"Archived receipt missing"
+        navigate("Penjualan");screenshot("history");page_click(872,41);key("Down");key("Return");time.sleep(0.25)
+        assert "Pratinjau struk" in windows(),"Archived receipt missing from app"
+        assert not uri_file.exists(),"Archived receipt unexpectedly opened browser"
+        screenshot("archived-receipt");key("Escape");time.sleep(0.2)
+        navigate("Pengaturan");page_click(1100,41);time.sleep(0.25)
+        import table_redraw as ui
+        ui.expanded=2
+        x,y=page_position(40,20)
+        active=f"2x2+32+{ui.nav_rows()['Operator']}"
+        assert pixels(screenshot("settings-accounts"),active)==bytes.fromhex('e7f3f1')*4,"Settings did not open employee accounts"
+        navigate("Pengaturan");page_click(620,350)
+        control=x11.XKeysymToKeycode(display,x11.XStringToKeysym(b"Control_L"))
+        xtest.XTestFakeKeyEvent(display,control,1,0);x11.XFlush(display);key("a");xtest.XTestFakeKeyEvent(display,control,0,0);x11.XFlush(display)
+        scan("baris pertama");scan("baris kedua")
+        notes=screenshot("settings-multiline-footer")
+        fx,fy=page_position(584,332)
+        for offset in [6,23]:
+            assert len(set(pixels(notes,f"140x12+{fx+10}+{fy+offset}")))>1,"Footer did not show ordinary multiline text"
+        navigate("Penjualan")
         page_click(924,128);screenshot("history-filters")
         page_click(960,195);key("End");key("Return")
         page_click(872,41);key("Down");key("Down");key("Return");listed=document()

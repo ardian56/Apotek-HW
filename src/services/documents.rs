@@ -63,17 +63,17 @@ pub fn open_html(html: &str) -> Result<(), String> {
 
 pub fn print_receipt(pool: &mysql::Pool, sale: &Sale, paper: u8) -> Result<(), String> {
     let settings = receipt_settings(Some(pool), sale, Some(paper))?;
+    print_receipt_with_settings(sale, &settings)
+}
+
+pub fn print_receipt_with_settings(sale: &Sale, settings: &ReceiptSettings) -> Result<(), String> {
     if cfg!(target_os = "windows") && !settings.printer_name.trim().is_empty() {
         crate::hardware::print_raw_to_spooler(
             &settings.printer_name,
-            &crate::hardware::generate_escpos_bytes(sale, &settings),
+            &crate::hardware::generate_escpos_bytes(sale, settings),
         )
     } else {
-        open_html(&receipt_html(sale, &settings).replacen(
-            "<body>",
-            "<body onload=\"window.print()\">",
-            1,
-        ))
+        crate::gui::views::print_preview::print_receipt_native(sale, settings)
     }
 }
 
@@ -117,47 +117,6 @@ button{{padding:10px 18px;background:#0d9488;color:white;border:0;border-radius:
         escape(title),
         escape(title)
     )
-}
-
-pub fn receipt_html(sale: &Sale, settings: &ReceiptSettings) -> String {
-    let mut body = format!("<p>{}<br>{}<br>{}</p><p>Faktur: {}<br>Tanggal: {}<br>Pembayaran: {}</p><table><thead><tr><th>Obat</th><th>Qty</th><th>Total</th></tr></thead><tbody>",
-        escape(&settings.address),escape(&settings.phone),escape(&settings.header_note),escape(&sale.invoice_no),escape(&sale.sale_date),escape(&sale.payment_type));
-    body.push_str(&format!(
-        "<tr><td colspan=3>Pelanggan: {} · Operator: {}</td></tr>",
-        escape(&settings.customer_name),
-        escape(&settings.operator_name)
-    ));
-    for item in &sale.items {
-        body.push_str(&format!(
-            "<tr><td>{}<br><small>{} @ {} · Disc {}</small></td><td>{}</td><td>{}</td></tr>",
-            escape(&item.product_name),
-            escape(&item.unit_name),
-            crate::gui::views::components::number(item.sell_price),
-            crate::gui::views::components::number(item.discount),
-            item.qty,
-            crate::gui::views::components::number(item.subtotal)
-        ));
-    }
-    let amount = crate::gui::views::components::rupiah;
-    let payment_detail = if sale.payment_type == "KREDIT" {
-        format!(
-            "Sisa: {}<br>Jatuh tempo: {}",
-            amount(if settings.returned {
-                0.0
-            } else {
-                (sale.grand_total - sale.paid_amount).max(0.0)
-            }),
-            escape(sale.due_date.as_deref().unwrap_or("—"))
-        )
-    } else {
-        format!("Kembali: {}", amount(sale.change_amount))
-    };
-    body.push_str(&format!("</tbody></table><p>Subtotal: {}<br>Diskon: {}<br>Ongkos: {}<br><b>Total: {}</b><br>Bayar: {}<br>{payment_detail}</p><p>{}</p>",
-        amount(sale.subtotal),amount(sale.discount),amount(sale.shipping),amount(sale.grand_total),amount(sale.paid_amount),escape(&settings.footer_note).replace('\n',"<br>")));
-    if settings.returned {
-        body.insert_str(0, "<p><b>FAKTUR DIRETUR (salinan)</b></p>");
-    }
-    page(&settings.store_name,&body,&format!("main{{width:{}mm;max-width:100%}}th,td{{padding:4px 1px;font-size:10px}}h1{{font-size:14px}}@page{{margin:3mm}}",settings.paper_width))
 }
 
 pub fn grouped_sales_html(title: &str, period: &str, rows: &[Vec<String>]) -> String {
@@ -276,22 +235,22 @@ mod tests {
         sale.change_amount = 499.55;
         let mut settings =
             crate::hardware::ReceiptSettings::from_values(&crate::db::demo::settings());
-        let html = receipt_html(&sale, &settings);
         let raw = crate::hardware::generate_escpos_bytes(&sale, &settings);
-        assert!(html.contains("Rp 9.500,55") && html.contains("Rp 499,55"));
         assert!(String::from_utf8_lossy(&raw).contains("Rp 9.500,55"));
         assert!(String::from_utf8_lossy(&raw).contains("Rp 499,55"));
         sale.payment_type = "KREDIT".into();
         sale.paid_amount = 2000.10;
         sale.change_amount = 0.0;
         sale.due_date = Some("2026-11-25".into());
-        let html = receipt_html(&sale, &settings);
         let raw = crate::hardware::generate_escpos_bytes(&sale, &settings);
-        assert!(html.contains("Sisa: Rp 7.500,45") && html.contains("Jatuh tempo: 2026-11-25"));
         assert!(String::from_utf8_lossy(&raw).contains("Rp 7.500,45"));
         assert!(String::from_utf8_lossy(&raw).contains("Jatuh tempo: 2026-11-25"));
         settings.returned = true;
-        assert!(receipt_html(&sale, &settings).contains("Sisa: Rp 0"));
+        let raw = crate::hardware::generate_escpos_bytes(&sale, &settings);
+        let raw = String::from_utf8_lossy(&raw);
+        assert!(raw.contains("FAKTUR DIRETUR (salinan)"));
+        let balance = raw.lines().find(|line| line.contains("Sisa:")).unwrap();
+        assert!(balance.ends_with("Rp 0"));
     }
     #[test]
     fn printed_reports_keep_totals_and_escape_content() {

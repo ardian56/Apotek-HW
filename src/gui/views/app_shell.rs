@@ -321,12 +321,18 @@ impl Pages {
                 _ => {
                     let mut brand = self.brand.clone();
                     let mut window = parent.clone();
-                    SettingsView::new(pool.clone(), user.clone(), move |name| {
-                        brand.set_label(&name);
-                        brand.set_tooltip(&name);
-                        brand.redraw();
-                        window.set_label(&format!("{name} · Kasir"));
-                    })
+                    let pages = self.clone();
+                    SettingsView::new(
+                        pool.clone(),
+                        user.clone(),
+                        move |name| {
+                            brand.set_label(&name);
+                            brand.set_tooltip(&name);
+                            brand.redraw();
+                            window.set_label(&format!("{name} · Kasir"));
+                        },
+                        move || pages.open("Operator"),
+                    )
                     .win
                 }
             };
@@ -478,6 +484,16 @@ impl AppShell {
         );
         line.set_frame(FrameType::FlatBox);
         line.set_color(T::BORDER);
+        let mut content_area = Frame::new(
+            SIDEBAR_WIDTH,
+            HEADER_HEIGHT,
+            width - SIDEBAR_WIDTH,
+            height - HEADER_HEIGHT,
+            None,
+        );
+        content_area.hide();
+        win.resizable(&content_area);
+        win.size_range(1024.min(width), 640.min(height), 0, 0);
         win.end();
         let sidebar = Rc::new(RefCell::new(Sidebar {
             headers,
@@ -495,6 +511,32 @@ impl AppShell {
             sidebar: sidebar.clone(),
             brand,
         };
+        let layout = sidebar.clone();
+        let mut resize_profile = profile.clone();
+        let mut resize_header = header.clone();
+        let mut breadcrumb = sidebar.borrow().breadcrumb.clone();
+        win.resize_callback(move |window, _, _, width, height| {
+            {
+                let mut sidebar = layout.borrow_mut();
+                sidebar.group.resize(0, 0, SIDEBAR_WIDTH, height);
+                sidebar.layout();
+            }
+            account_line.resize(20, height - 90, 148, 1);
+            resize_profile.resize(20, height - 76, 148, 34);
+            role.resize(26, height - 32, 140, 18);
+            border.resize(SIDEBAR_WIDTH - 1, 0, 1, height);
+            resize_header.resize(SIDEBAR_WIDTH, 0, width - SIDEBAR_WIDTH, HEADER_HEIGHT);
+            breadcrumb.resize(
+                SIDEBAR_WIDTH + 28,
+                16,
+                (width - SIDEBAR_WIDTH - 332).max(120),
+                24,
+            );
+            info.resize(width - 280, 16, 252, 24);
+            line.resize(SIDEBAR_WIDTH, HEADER_HEIGHT - 1, width - SIDEBAR_WIDTH, 1);
+            window.redraw();
+        });
+        enable_fullscreen(&mut win);
         {
             let mut nav = sidebar.borrow_mut();
             for (i, b) in nav.headers.iter_mut().enumerate() {
@@ -521,6 +563,15 @@ impl AppShell {
                 }
             }
         }
+        let mut fullscreen_window = win.clone();
+        profile.add(
+            "Layar penuh (F11)",
+            Shortcut::None,
+            MenuFlag::Normal | MenuFlag::MenuDivider,
+            move |_| {
+                fullscreen_window.fullscreen(!fullscreen_window.fullscreen_active());
+            },
+        );
         let mut parent = win.clone();
         let cache = pages.cache.clone();
         profile.add("Keluar akun", Shortcut::None, MenuFlag::Normal, move |_| {

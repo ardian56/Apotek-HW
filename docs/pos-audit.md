@@ -44,6 +44,37 @@ Uji interaksi GUI untuk perubahan terbaru belum dijalankan karena automatic appr
 
 Alur dan batas ini cukup untuk POS dasar apotek; belum merupakan sistem akuntansi atau seluruh fitur iB. [Pemetaan IB](ib-reference.md) tetap menjadi acuan, dengan kebutuhan pengguna menghilangkan dokter dari antarmuka.
 
+## Penyesuaian barcode — 25 November 2026
+
+Mengikuti gambar iB nomor 8, antrean label menyediakan Tambah obat dengan pemilih banyak obat, Pilih semua hasil pencarian, serta pratinjau lembar putih berbingkai di dalam aplikasi dengan zoom 75–200%. Alur utama adalah Lihat label, lalu Cetak dari pratinjau memakai dialog printer native. Ekspor HTML barcode dan pembentuk HTML label dihapus. Toolbar master obat memuat tiga tombol: Tambah obat, Cetak barcode, dan Lainnya. Jumlah tetap dapat diterapkan pada beberapa baris. Penambahan obat duplikat diabaikan dan perubahan yang melewati batas 200 obat atau 1.000 label ditolak sebelum mengubah antrean. Pratinjau dan cetak native memakai validasi ukuran/DPI yang sama. Harga desimal tetap dicetak.
+
+Pratinjau struk pada kasir dan riwayat juga berada di dalam aplikasi. Draf ditandai dan belum dapat dicetak. Struk final memakai printer ESC/POS yang dikonfigurasi di Windows atau dialog printer native pada platform lain/tanpa printer langsung. Cetak native memakai ukuran sebenarnya, membagi dokumen ke halaman, serta menolak area cetak yang terlalu sempit. Pembatalan/kegagalan cetak tetap memakai alur checkout yang menyimpan faktur terlebih dahulu dan dapat mencetak ulang tanpa transaksi baru.
+
+Susunan struk dirapikan menjadi nota thermal dengan identitas tengah, metadata ringkas, rincian barang, nominal rata kanan, pemisah putus-putus, TOTAL tebal, dan catatan penutup. Pratinjau dan ESC/POS memakai pembentuk baris yang sama. Diskon barang kini ikut pada ESC/POS; baris panjang dibungkus tanpa menyatukan nominal dengan rincian barang. Diskon/ongkos nol tidak ditampilkan. Contoh visual di `docs/examples` dibuat dari data layout uji, sementara pemeriksaan GUI tetap terpisah.
+
+Log pengguna kemudian menunjukkan panic saat menekan Tambah obat: FLTK menolak karakter format NUL pada MultiBrowser. Pemilih sekarang memakai karakter kontrol ASCII non-NUL yang tidak muncul pada awal kode obat yang valid. Skrip GUI diperluas untuk membuka pemilih, mencari satu obat tertentu, menambahkannya ke antrean, lalu memeriksa kodenya pada pratinjau sebelum mencoba dialog printer. Pemeriksaan interaksi ini masih menunggu akses eksekusi GUI.
+
+Pilihan tabel kini memakai satu penyimpanan baris terpilih dan titik awal Shift. Klik biasa mengganti pilihan; Shift memilih rentang dari klik sebelumnya; Ctrl menambah atau membuang baris terpisah. Penambahan obat mempertahankan pilihan lama; penggantian susunan daftar mereset titik awal agar tidak memakai posisi lama. Ubah jumlah dan hapus label memakai indeks baris yang benar-benar dipilih. Menu master obat juga mempertahankan pilihan Ctrl saat klik kanan pada baris terpilih; cetak barcode dan nonaktifkan tidak mengambil obat di antara dua pilihan terpisah.
+
+- `cargo build --offline`: lulus.
+- `cargo test --offline`: 16 lulus; uji database tetap terpisah. Uji mencakup titik awal/rentang Shift, pilihan/toggle Ctrl, reset pilihan, perubahan jumlah hanya pada pilihan terpisah, isi struk native/ESC-POS, snapshot nama, diskon barang dalam rupiah, harga desimal, teks panjang pada 32/48 kolom, kredit/retur, dan pembagian 1.000 label ke halaman. Perubahan cetak ini tidak mengubah database atau mutasi stok.
+- `python3 tests/barcode_decode.py`: 11 kode, tiga preset ukuran/DPI, dan enam label dari tiga obat dalam satu dokumen terbaca persis oleh pembaca independen.
+- Skrip GUI diperbarui untuk pemilih banyak obat, pratinjau struk/barcode native, perubahan jumlah, dialog cetak, dan penambahan ulang tanpa duplikasi. Uji GUI belum dijalankan karena automatic approval review sebelumnya menolak Xvfb; screenshot lama belum diperbarui. Pengujian layout tidak membuktikan dialog driver maupun hasil fisik cetak vektor.
+
+## Pengaturan dan akun karyawan — 25 November 2026
+
+Pengaturan menyediakan tombol Akun karyawan yang membuka pengelolaan akun Operator yang sama. Admin dapat menambah akun melalui Tambah akun, dengan username, nama lengkap, pilihan hak akses Kasir/Gudang/Admin, pilihan status Aktif/Nonaktif, dan password. Status pada daftar ditampilkan sebagai teks; edit mengembalikannya ke nilai database yang sama. Penanganan password bcrypt dan perlindungan admin terakhir tetap memakai alur yang ada.
+
+Header/footer memakai input multiline native. Enter membuat baris baru tanpa tampilan karakter kontrol `^J`; pengguna tidak perlu mengetik kode pemformatan. Nilai disimpan sebagai teks asli. Baris kosong dipertahankan sampai ke pratinjau dan ESC/POS, dan karakter seperti `<3` tetap menjadi teks biasa. Susunan formulir disesuaikan agar kotak teks tidak bertumpuk dengan pilihan kertas dan tombol simpan.
+
+Build offline dan 16 uji unit lulus; pemeriksaan tambahan pada uji struk memverifikasi nilai footer, newline, baris kosong, dan teks literal. Skrip GUI diperbarui untuk akses akun dari Pengaturan serta pengetikan dua baris footer. Uji GUI masih belum dijalankan karena penolakan automatic approval review terhadap Xvfb sebelumnya. Tidak ada perubahan skema atau pembuatan akun pada database apotek asli selama pengembangan.
+
+## Ukuran jendela — 25 November 2026
+
+Jendela utama dan pratinjau struk/barcode mendukung resize serta maximize melalui kontrol sistem. **F11** mengaktifkan/menonaktifkan fullscreen; **Esc** keluar dari fullscreen. Menu **Akun → Layar penuh (F11)** juga tersedia. Sidebar tetap selebar 188 piksel, area konten mengikuti jendela, dan lebar kolom tabel kembali tanpa pergeseran pembulatan saat ukuran dipulihkan. Dashboard menyesuaikan lebar konten; pratinjau menjaga ukuran dokumen dan skala cetak.
+
+Build offline dan 18 uji unit lulus, termasuk tombol fullscreen, pemisahan shortcut POS, pemulihan lebar kolom, dan perubahan kolom pengguna. Skrip sidebar diperluas untuk resize hints, perubahan ukuran, F11, dan Esc. Pemeriksaan GUI dan tombol maximize pada perangkat target belum dijalankan karena penolakan Xvfb sebelumnya.
+
 ## Memperbarui instalasi
 
 Jalankan versi baru pada server terlebih dahulu untuk menambahkan kolom snapshot obat, lalu perbarui semua client. Migrasi tidak mengisi ulang data contoh atau pengaturan. Snapshot hanya tersedia untuk transaksi baru; identitas historis yang tidak pernah disimpan tidak dapat direkonstruksi. Login/sidebar otomatis membaca nama apotek yang sudah tersimpan pada database.

@@ -1,6 +1,6 @@
 use super::components::*;
 use crate::{db, gui::theme::AppTheme as T};
-use fltk::{enums::CallbackTrigger, input::InputType, prelude::*, window::Window};
+use fltk::{enums::CallbackTrigger, input::InputType, menu::Choice, prelude::*, window::Window};
 use mysql::{params, prelude::*, Pool, Value};
 
 pub struct MasterSimpleView {
@@ -51,19 +51,23 @@ fn editor(
     let mut win = Window::default()
         .with_size(660, height)
         .with_label(if existing.is_some() {
-            "Edit data"
+            if account {
+                "Edit akun karyawan"
+            } else {
+                "Edit data"
+            }
         } else {
-            "Tambah data"
+            if account {
+                "Tambah akun karyawan"
+            } else {
+                "Tambah data"
+            }
         });
     win.set_color(T::BG_APP);
     let mut inputs = Vec::new();
     for (i, label) in labels.iter().enumerate() {
-        inputs.push(input(
-            24,
-            20 + i as i32 * 76,
-            612,
-            label,
-            existing
+        inputs.push(input(24, 20 + i as i32 * 76, 612, label, {
+            let stored = existing
                 .as_ref()
                 .and_then(|r| r.get(i + 1))
                 .map(String::as_str)
@@ -73,14 +77,45 @@ fn editor(
                     "KASIR"
                 } else {
                     ""
-                }),
-        ));
+                });
+            if account && columns[i] == "is_active" {
+                match stored {
+                    "Aktif" => "1",
+                    "Nonaktif" => "0",
+                    _ => stored,
+                }
+            } else {
+                stored
+            }
+        }));
     }
     if let Some(index) = columns.iter().position(|column| *column == "notes") {
         inputs[index].set_type(InputType::Multiline);
         inputs[index].resize(24, 44 + index as i32 * 76, 612, 66);
     }
     if account {
+        for (index, captions, values) in [
+            (2, "Kasir|Gudang|Admin", vec!["KASIR", "GUDANG", "ADMIN"]),
+            (3, "Aktif|Nonaktif", vec!["1", "0"]),
+        ] {
+            let mut field = inputs[index].clone();
+            field.hide();
+            let mut choice = Choice::new(field.x(), field.y(), field.w(), field.h(), None);
+            style_choice(&mut choice);
+            choice.add_choice(captions);
+            choice.set_value(
+                values
+                    .iter()
+                    .position(|value| *value == field.value())
+                    .map(|index| index as i32)
+                    .unwrap_or(-1),
+            );
+            choice.set_callback(move |choice| {
+                if let Some(value) = values.get(choice.value() as usize) {
+                    field.set_value(value);
+                }
+            });
+        }
         let mut password = input(
             24,
             20 + labels.len() as i32 * 76,
@@ -107,7 +142,7 @@ fn editor(
             if table=="suppliers"{if values[1].is_empty(){return Err("Nama suplier wajib diisi".into());}if values[0].is_empty(){let value:u64=pool.get_conn().and_then(|mut c|c.query_first("SELECT UUID_SHORT()")).map_err(|e|e.to_string())?.ok_or("Kode tidak dapat dibuat")?;values[0]=format!("SUP-{value}");}}
             else if values.first().map(|s|s.is_empty()).unwrap_or(true){return Err("Nama / username wajib diisi".into());}
             if account{
-                if values[1].is_empty()||!matches!(values[2].as_str(),"ADMIN"|"KASIR"|"GUDANG")||!matches!(values[3].as_str(),"0"|"1"){return Err("Isi nama, role ADMIN/KASIR/GUDANG, dan status 0/1".into());}
+                if values[1].is_empty()||!matches!(values[2].as_str(),"ADMIN"|"KASIR"|"GUDANG")||!matches!(values[3].as_str(),"0"|"1"){return Err("Isi nama lengkap, pilih hak akses dan status akun".into());}
             }
             let mut conn=pool.get_conn().map_err(|e|e.to_string())?;
             let mut tx=conn.start_transaction(mysql::TxOpts::default()).map_err(|e|e.to_string())?;
@@ -143,11 +178,28 @@ impl MasterSimpleView {
     ) -> Self {
         let mut win = Window::new(0, 108, 1200, 612, None);
         win.set_color(T::BG_APP);
-        page_header(title, "Kelola data apotek melalui form tambah dan edit.");
+        page_header(
+            title,
+            if table == "users" {
+                "Buat akun login dan atur hak akses karyawan."
+            } else {
+                "Kelola data apotek melalui form tambah dan edit."
+            },
+        );
         let mut search = input(28, 88, 540, "Cari nama / username", "");
         search.set_trigger(CallbackTrigger::EnterKey);
         let mut refresh = button(588, 112, 148, "Tampilkan", true);
-        let mut add = button(984, 24, 188, "Tambah", true);
+        let mut add = button(
+            984,
+            24,
+            188,
+            if table == "users" {
+                "Tambah akun"
+            } else {
+                "Tambah"
+            },
+            true,
+        );
         let mut edit = button(28, 552, 160, "Edit data terpilih", false);
         let mut headers = vec!["ID"];
         headers.extend(
@@ -195,7 +247,18 @@ impl MasterSimpleView {
                     Ok(data)
                 };
                 match result {
-                    Ok(data) => {
+                    Ok(mut data) => {
+                        if table == "users" {
+                            for row in &mut data {
+                                if let Some(status) = row.get_mut(4) {
+                                    *status = match status.as_str() {
+                                        "1" => "Aktif".into(),
+                                        "0" => "Nonaktif".into(),
+                                        _ => status.clone(),
+                                    };
+                                }
+                            }
+                        }
                         let query = s.value().to_lowercase();
                         let data = data
                             .into_iter()
@@ -399,14 +462,9 @@ impl MasterSimpleView {
         Self::build(
             pool,
             "users",
-            "Operator dan hak akses",
+            "Akun karyawan",
             vec!["username", "full_name", "role", "is_active"],
-            vec![
-                "Username",
-                "Nama lengkap",
-                "Role (ADMIN / KASIR / GUDANG)",
-                "Aktif (1 ya, 0 tidak)",
-            ],
+            vec!["Username", "Nama lengkap", "Hak akses", "Status akun"],
         )
     }
 }

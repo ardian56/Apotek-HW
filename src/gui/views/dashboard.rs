@@ -9,7 +9,7 @@ use crate::{
 use fltk::{
     enums::{Color, FrameType},
     frame::Frame,
-    group::Scroll,
+    group::{Group, Scroll},
     misc::{Chart, ChartType},
     prelude::*,
     window::Window,
@@ -140,6 +140,7 @@ impl DashboardView {
         win.set_color(T::BG_APP);
         let mut scroll = Scroll::new(0, 0, 1200, 612, None);
         scroll.set_type(fltk::group::ScrollType::Vertical);
+        let mut content = Group::new(0, 0, 1200, 864, None);
         page_header("Ringkasan apotek", "");
         let status = text(28, 58, 1144, 20, "", 12, false);
         let mut numbers = Vec::<Frame>::new();
@@ -192,7 +193,16 @@ impl DashboardView {
             g.table.set_col_width(2, 170);
         }
         let _space = Frame::new(28, 840, 1130, 24, None);
+        content.end();
         scroll.end();
+        scroll.resize_callback(move |scroll, x, y, width, _| {
+            content.resize(
+                x - scroll.xposition(),
+                y - scroll.yposition(),
+                width,
+                content.h(),
+            );
+        });
         win.end();
         let refresh = {
             let mut n = numbers.clone();

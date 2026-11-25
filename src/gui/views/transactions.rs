@@ -822,15 +822,8 @@ pub fn bind_cashier(view: &mut KasirView, pool: Option<Pool>, user: User) {
                 &sale,
                 Some(if paper.value() == 1 { 80 } else { 58 }),
             )?;
-            let mut html = crate::services::documents::receipt_html(&sale, &settings);
-            if draft {
-                html = html.replacen(
-                    "<table>",
-                    "<p><b>Pratinjau · transaksi belum disimpan</b></p><table>",
-                    1,
-                );
-            }
-            crate::services::documents::open_html(&html)
+            super::print_preview::show_receipt(sale, settings, draft);
+            Ok(())
         });
         if let Err(e) = result {
             st_preview.set_label(&e);

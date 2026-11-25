@@ -578,9 +578,8 @@ impl ReportsView {
                 };
                 let settings =
                     crate::services::documents::receipt_settings(p.as_ref(), &sale, None)?;
-                crate::services::documents::open_html(&crate::services::documents::receipt_html(
-                    &sale, &settings,
-                ))
+                super::print_preview::show_receipt(sale, settings, false);
+                Ok(())
             })();
             if let Err(e) = result {
                 st.set_label(&e);

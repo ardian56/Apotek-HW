@@ -1,5 +1,8 @@
 use std::fmt::Write;
 
+pub const MAX_PRODUCTS: usize = 200;
+pub const MAX_LABELS: i32 = 1000;
+
 // Code 128 bar/space widths, including the seven-part stop symbol.
 const PATTERNS: [&str; 107] = [
     "212222", "222122", "222221", "121223", "121322", "131222", "122213", "122312", "132212",
@@ -16,6 +19,7 @@ const PATTERNS: [&str; 107] = [
     "113141", "114131", "311141", "411131", "211412", "211214", "211232", "2331112",
 ];
 
+#[derive(Clone)]
 pub struct Barcode {
     pub bars: Vec<(i32, i32)>,
     pub width: i32,
@@ -86,6 +90,7 @@ impl Barcode {
         })
     }
 
+    #[cfg(test)]
     pub fn svg(&self) -> String {
         let mut svg = format!(
             r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {} 64" width="{}mm" height="12mm" preserveAspectRatio="none" shape-rendering="crispEdges"><rect width="100%" height="100%" fill="white"/><g fill="black">"#,
@@ -115,30 +120,31 @@ pub struct LabelItem<'a> {
     pub quantity: i32,
 }
 
-#[cfg(test)]
-pub fn labels_html(
-    items: &[LabelItem<'_>],
-    size: Option<(u32, u32, u32)>,
-) -> Result<String, String> {
-    labels_html_at_dpi(items, size, 203)
+pub struct LabelLayout {
+    pub width: f64,
+    pub height: f64,
+    pub columns: u32,
+    pub barcodes: Vec<Barcode>,
 }
 
-pub fn labels_html_at_dpi(
+pub fn prepare_layout(
     items: &[LabelItem<'_>],
     size: Option<(u32, u32, u32)>,
     dpi: u32,
-) -> Result<String, String> {
+) -> Result<LabelLayout, String> {
     if !matches!(dpi, 203 | 300) {
         return Err("DPI printer harus 203 atau 300".into());
     }
     if items.is_empty()
-        || items.len() > 200
-        || items.iter().any(|i| !(1..=1000).contains(&i.quantity))
+        || items.len() > MAX_PRODUCTS
+        || items
+            .iter()
+            .any(|i| !(1..=MAX_LABELS).contains(&i.quantity))
     {
         return Err("Pilih obat dan jumlah label. Maksimum 1.000 label per cetak.".into());
     }
     let count: i32 = items.iter().map(|i| i.quantity).sum();
-    if count > 1000 {
+    if count > MAX_LABELS {
         return Err("Maksimum 1.000 label per cetak".into());
     }
     let barcodes = items
@@ -155,9 +161,8 @@ pub fn labels_html_at_dpi(
     if width < 20.0 || height < 20.0 || !(1..=4).contains(&columns) {
         return Err("Ukuran label tidak valid".into());
     }
-    let mut labels = String::new();
-    for (item, barcode) in items.iter().zip(barcodes) {
-        if !item.price.is_finite() || item.price < 0.0 {
+    for (item, barcode) in items.iter().zip(&barcodes) {
+        if !item.price.is_finite() || item.price < 0.0 || item.price >= 1e13 {
             return Err("Harga label tidak valid".into());
         }
         if (width - 4.0) / (barcode.width as f64) < (50.8 / dpi as f64).max(0.19) {
@@ -166,38 +171,29 @@ pub fn labels_html_at_dpi(
                 item.code
             ));
         }
-        let svg = barcode
-            .svg()
-            .replace(
-                &format!("{}mm", barcode.width as f64 * 0.254),
-                &format!("{}mm", width - 4.0),
-            )
-            .replace(
-                "height=\"12mm\"",
-                &format!("height=\"{}mm\"", height - 12.0),
-            );
-        let digits = format!("{:.0}", item.price);
-        let mut price = String::new();
-        for (i, digit) in digits.chars().enumerate() {
-            if i > 0 && (digits.len() - i) % 3 == 0 {
-                price.push('.');
-            }
-            price.push(digit);
-        }
-        let label = format!("<article class=label><div class=name>{}</div><div class=price>Rp {}</div>{}<div class=code>{}</div></article>",
-            escape(item.name), price, svg, escape(item.code));
-        labels.push_str(&label.repeat(item.quantity as usize));
     }
-    Ok(format!(
-        r#"<!doctype html><html lang="id"><meta charset="utf-8"><title>Label barcode obat</title>
-<style>*{{box-sizing:border-box}}body{{margin:24px;font:14px Arial;color:#334155;background:#f8fafc}}
-button{{padding:10px 18px;border:0;border-radius:5px;background:#0d9488;color:white;cursor:pointer}}
-.sheet{{display:grid;grid-template-columns:repeat({columns},{width}mm);gap:2mm;width:max-content}}
-.label{{width:{width}mm;height:{height}mm;padding:1mm;overflow:hidden;background:white;color:black;text-align:center;break-inside:avoid}}
-.name{{height:4mm;overflow:hidden;font-size:8px;line-height:2mm}}.price,.code{{font:8px Arial;height:3mm;white-space:nowrap}}
-svg{{display:block;margin:auto}}@page{{margin:8mm}}@media print{{body{{margin:0;background:white}}.controls{{display:none}}}}
-</style><body><div class=controls><button onclick="window.print()">Cetak label</button><p>Skala 100% / ukuran sebenarnya. Matikan header dan footer cetak.</p></div><div class=sheet>{labels}</div></body></html>"#
-    ))
+    Ok(LabelLayout {
+        width,
+        height,
+        columns,
+        barcodes,
+    })
+}
+
+pub fn price_text(price: f64) -> String {
+    let cents = (price * 100.0).round() as u64;
+    let digits = (cents / 100).to_string();
+    let mut output = String::from("Rp ");
+    for (i, digit) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i) % 3 == 0 {
+            output.push('.');
+        }
+        output.push(digit);
+    }
+    if cents % 100 != 0 {
+        write!(output, ",{:02}", cents % 100).unwrap();
+    }
+    output
 }
 
 pub fn file_uri(path: &std::path::Path) -> String {
@@ -224,6 +220,51 @@ mod tests {
     use super::*;
 
     #[test]
+    fn mass_sheet_preserves_each_medicine_and_quantity() {
+        let mut items = [
+            LabelItem {
+                code: "0012",
+                name: "Obat <A>",
+                price: 12500.50,
+                quantity: 2,
+            },
+            LabelItem {
+                code: "CTH-002",
+                name: "Obat B",
+                price: 900.0,
+                quantity: 3,
+            },
+            LabelItem {
+                code: "8999909001001",
+                name: "Obat C",
+                price: 0.0,
+                quantity: 1,
+            },
+        ];
+        let size = Some((50, 30, 3));
+        let layout = prepare_layout(&items, size, 203).unwrap();
+        assert_eq!(
+            (layout.width, layout.height, layout.columns),
+            (50.0, 30.0, 3)
+        );
+        assert_eq!(layout.barcodes.len(), 3);
+        assert_eq!(items.iter().map(|item| item.quantity).sum::<i32>(), 6);
+        assert_eq!(price_text(items[0].price), "Rp 12.500,50");
+        assert!(prepare_layout(&items, size, 96).is_err());
+        assert!(prepare_layout(&items, Some((20, 30, 3)), 203).is_err());
+        assert!(prepare_layout(&items, Some((50, 30, 0)), 203).is_err());
+        items[0].quantity = 997;
+        assert!(prepare_layout(&items, size, 203).is_err());
+        items[0].quantity = 1;
+        for price in [f64::NAN, f64::INFINITY, -0.01, 1e13] {
+            items[0].price = price;
+            assert!(prepare_layout(&items, size, 203).is_err());
+        }
+        assert_eq!(price_text(0.0), "Rp 0");
+        assert_eq!(price_text(999.999), "Rp 1.000");
+    }
+
+    #[test]
     fn barcode_labels_encode_and_preserve_codes() {
         // Published Code 128-B vector: start 104, A/B/C (33/34/35), checksum 1, stop 106.
         let abc = Barcode::new("ABC").unwrap();
@@ -237,37 +278,28 @@ mod tests {
         for code in ["", "é", "123\n", &"x".repeat(51)] {
             assert!(Barcode::new(code).is_err());
         }
-        let html = labels_html(
-            &[LabelItem {
-                code: "0012",
-                name: "Obat <A> & B",
-                price: 1500.0,
-                quantity: 3,
-            }],
-            None,
-        )
-        .unwrap();
-        assert_eq!(html.matches("<article ").count(), 3);
-        assert!(html.contains("Obat &lt;A&gt; &amp; B"));
-        assert!(html.contains("0012</div>"));
-        assert!(labels_html(
+        assert_eq!(escape("Obat <A> & B"), "Obat &lt;A&gt; &amp; B");
+        assert!(abc.svg().contains("<svg"));
+        assert!(prepare_layout(
             &[LabelItem {
                 code: "0012",
                 name: "Obat",
                 price: 0.0,
                 quantity: 0
             }],
-            None
+            None,
+            203
         )
         .is_err());
-        assert!(labels_html(
+        assert!(prepare_layout(
             &[LabelItem {
                 code: "0012",
                 name: "Obat",
                 price: 0.0,
                 quantity: 1001
             }],
-            None
+            None,
+            203
         )
         .is_err());
         assert_eq!(

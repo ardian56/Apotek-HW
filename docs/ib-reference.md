@@ -4,7 +4,7 @@ Sumber: sepuluh gambar yang diberikan pengguna di `/home/ardiand/Downloads/IB`. 
 
 Referensi ini melengkapi [referensi video](video-reference.md). Hasil pemeriksaan transaksi, perbaikan identitas apotek, dan batas produksi tersedia pada [audit POS](pos-audit.md). Pilihan proyek tetap desktop Windows, antarmuka bersih dan ringan, database LAN, dan cadangan lokal. Perilaku fitur menjadi acuan; warna, ikon, bingkai, dan penumpukan jendela tidak perlu ditiru.
 
-## Status penyesuaian, 23 November 2026
+## Status penyesuaian, 25 November 2026
 
 Lima tahap penyesuaian di bawah sudah diterapkan. Tabel temuan awal tetap disimpan sebagai catatan audit; kolom perbandingannya menggambarkan keadaan sebelum penyesuaian ini.
 
@@ -15,15 +15,35 @@ Lima tahap penyesuaian di bawah sudah diterapkan. Tabel temuan awal tetap disimp
 | 3 — Impor obat | Unduh template Excel, pilih berkas, progres persen, dan jumlah baris. Penyimpanan berlangsung dalam transaksi database pada thread terpisah; bila gagal, seluruh impor dibatalkan. Impor obat mencakup master, satuan beli, dan konversi, tetapi belum memulihkan stok/batch historis atau relasi suplier. |
 | 4 — Daftar penjualan | Filter tanggal/pencarian; operator, pelanggan, dan pembayaran tersedia lewat Filter tambahan. Kolom waktu, pembayaran, jatuh tempo, Sales, laba, dan operator; rincian obat per faktur, serta menu cetak/ekspor. Dokter tidak ditampilkan. |
 | 5 — Input penjualan | Baris kode/nama/jumlah/satuan/harga/diskon langsung di atas keranjang. Scan + Enter menambah satu satuan dasar dan scan berulang menaikkan jumlah. Tanggal, faktur otomatis, pembayaran, Sales, dan pelanggan tampil di atas. Baris input dan keranjang memakai lebar penuh. Diskon faktur persen/nominal, ongkos, total, bayar, kembalian, dan pilihan kertas 58/80 mm tampil langsung di bawah. Dokter tidak ditampilkan. ED dan batch tetap dicatat saat stok masuk. |
-| 6 — Detail dan struk | Pratinjau sebelum simpan diberi penanda draf. Faktur tersimpan dapat dipratinjau dan dicetak ulang dari riwayat. Nama pelanggan/operator, diskon, ongkos, total, dan status retur ditampilkan. F4 pada kasir menyimpan dan mencetak dalam satu aksi; setelah tersimpan, F4 mencetak ulang faktur yang sama. F3 menyimpan tanpa mencetak. |
+| 6 — Detail dan struk | Pratinjau struk berada di dalam aplikasi. Sebelum simpan, struk bertanda draf dan tombol cetaknya dinonaktifkan. Faktur tersimpan dapat dipratinjau dan dicetak ulang dari riwayat. Nama pelanggan/operator, diskon, ongkos, total, dan status retur ditampilkan. F4 pada kasir menyimpan dan mencetak dalam satu aksi; setelah tersimpan, F4 mencetak ulang faktur yang sama. F3 menyimpan tanpa mencetak. |
 | 7 — Laporan per barang | Rincian faktur dikelompokkan per kode obat dengan jumlah, satuan, harga, penjualan neto, laba, pelanggan, dan total kelompok. Diskon faktur dialokasikan menurut subtotal barang; ongkos masuk laba faktur, bukan laba per barang. Faktur yang diretur tidak masuk laporan ini. |
-| 8 — Barcode | Antrean beberapa obat, nama/harga pada label, jumlah per obat, hapus/reset, ukuran dan kolom label, DPI 203/300, serta pratinjau/simpan/cetak HTML melalui browser. |
-| 9 — Menu baris obat | Shift memilih rentang baris. Klik kanan mempertahankan pilihan beberapa baris bila klik masih di dalam pilihan. Menu menyediakan edit, nonaktifkan, refresh, kartu stok, barcode, stok opname, isi barcode kemasan, dan batch/ED. Barcode dan nonaktifkan mendukung beberapa obat. |
+| 8 — Barcode | Tambah obat membuka pemilih dengan Ctrl/Shift atau Pilih semua hasil pencarian. Jumlah per obat, hapus, kosongkan daftar, ukuran/kolom label, dan DPI 203/300 tersedia. Lihat label membuka lembar putih dalam aplikasi dengan zoom 75–200%; tombol Cetak memakai dialog printer native. Ekspor HTML barcode dihapus. |
+| 9 — Menu baris obat | Shift memilih rentang baris; Ctrl menambah/membatalkan baris terpisah. Klik kanan mempertahankan pilihan bila baris yang diklik termasuk pilihan tersebut. Menu menyediakan edit, nonaktifkan, refresh, kartu stok, barcode, stok opname, isi barcode kemasan, dan batch/ED. Barcode dan nonaktifkan memakai daftar obat yang benar-benar dipilih. |
 | 10 — Grafik bulanan | Pilih bulan `YYYY-MM` untuk grafik harian omzet dan laba, total bulan, serta pratinjau/cetak melalui browser. Grafik juga menampilkan laba negatif. |
 
 Antarmuka memakai tema FLTK terang yang sama pada kasir, master, dan dialog. Navigasi kemudian diubah menjadi sidebar sesuai permintaan pengguna: kelompok menu dapat dibuka-tutup, halaman aktif ditandai, dan akun berada di bawah. Tangkapan layar hasil penyesuaian tersedia di [referensi video](video-reference.md#pratinjau).
 
+### Label barcode massal
+
+Gambar 8 memperlihatkan beberapa kode obat pada satu lembar dengan tiga kolom. Buka **Cetak barcode** di master obat atau menu klik kanan. Gunakan **Tambah obat**, cari nama/kode lalu tekan Enter, dan pilih dengan Ctrl/Shift atau **Pilih semua** hasil yang tampil. Pilihan yang sudah ada di antrean tidak ditambahkan ulang. Pada antrean, klik biasa mengganti pilihan, Shift memilih rentang dari titik awal klik, dan Ctrl menambah/membatalkan baris terpisah. **Ubah jumlah pilihan** menerapkan **Jumlah label** hanya pada baris yang dipilih; **Hapus dari daftar** mengikuti pilihan yang sama. Penambahan obat mempertahankan pilihan, sedangkan penggantian susunan daftar mereset pilihan dan titik awal Shift.
+
+Alur utama hanya **Lihat label**, lalu **Cetak** pada pratinjau. Semua label tampil pada lembar putih berbingkai di atas latar abu-abu, dengan gulir untuk antrean panjang. Pilih zoom 75%, 100%, 125%, 150%, atau 200%; default 150%. Zoom hanya mengubah tampilan. Nama dan harga rata kiri, barcode berada di bawahnya, serta kode terbaca di tengah. Label dicetak sebagai vektor pada ukuran sebenarnya dan dibagi ke halaman tanpa memotong baris label. Pilih kertas yang memuat semua kolom; tiga kolom label 50 mm dengan jarak 2 mm membutuhkan area cetak 154 mm. Kertas terlalu sempit ditolak tanpa mengecilkan barcode. **Kosongkan daftar** menghapus antrean label. Harga desimal dan nol di awal kode dipertahankan. Barcode tidak menyediakan ekspor/cetak HTML.
+
+Struk memakai susunan nota thermal: identitas di tengah, nomor/tanggal/kasir/pelanggan/pembayaran, nama barang diikuti jumlah × harga dan nominal rata kanan, garis putus-putus, TOTAL tebal, tunai/kembali atau kredit/sisa, dan catatan penutup. Diskon/ongkos nol disembunyikan. Pratinjau dan ESC/POS mengambil isi dari pembentuk baris struk yang sama, termasuk diskon barang, tanggal lokal yang diformat, pecahan rupiah, dan kredit/retur.
+
+Contoh berikut dibangkitkan dari data layout pratinjau dengan data uji. Gambar ini membantu meninjau susunan dokumen; pemeriksaan GUI dan printer tetap tercatat terpisah.
+
+![Contoh layout struk 58 mm](examples/struk-58mm.png)
+
+![Contoh layout barcode massal](examples/barcode-massal.png)
+
+Toolbar master obat disederhanakan menjadi **Tambah obat**, **Cetak barcode**, dan **Lainnya**. Edit, nonaktifkan, muat ulang, serta impor/ekspor Excel tetap tersedia di menu Lainnya. Navigasi halaman berada di kanan dan tombol sebelumnya/berikutnya dinonaktifkan ketika tidak ada halaman tujuan.
+
+Perubahan 25 November diverifikasi dengan build offline dan 16 uji unit. Uji layout native mencakup isi struk, teks panjang, pecahan rupiah, kredit/retur, serta pembagian 1.000 label ke halaman tanpa kehilangan label. Uji ESC/POS memastikan baris panjang tetap muat pada 32/48 kolom dan nominal rata kanan. Pembaca barcode independen memverifikasi 11 kode, tiga preset ukuran/DPI, serta enam vektor label dari tiga obat. Uji interaksi GUI terbaru telah diperbarui tetapi belum dijalankan karena eksekusi Xvfb sebelumnya ditolak automatic approval review. Screenshot barcode lama belum menggambarkan pemilih dan pratinjau baru; dialog printer dan hasil cetak vektor masih perlu diperiksa pada perangkat target.
+
 ### Alur pending dan cetak
+
+Tambahan kebutuhan pengguna pada Pengaturan menyediakan **Akun karyawan → Tambah akun** menggunakan pengelolaan akun Operator yang sama. Hak akses dan status dipilih dari daftar. Pengelolaan akun hanya untuk admin. Header/footer struk menggunakan input beberapa baris dengan Enter, termasuk baris kosong, sehingga pengguna tidak mengetik `^J` atau markup.
 
 Gambar 5 memperlihatkan Simpan F3, Cetak F4, Pending F6, dan Daftar Pending F7 dalam kasir yang sama. Gambar 6 memperlihatkan pratinjau struk untuk faktur tersimpan. Gambar tidak membuktikan urutan internal cetak dan penyimpanan iB; proyek ini menyimpan transaksi terlebih dahulu agar struk final merujuk faktur dan stok yang sudah tercatat.
 
@@ -32,7 +52,7 @@ Gambar 5 memperlihatkan Simpan F3, Cetak F4, Pending F6, dan Daftar Pending F7 d
 - Pending lama dengan faktur sama ditampilkan sekali, memakai versi terakhir. Versi lama tidak dihapus saat membaca daftar; semua versi untuk faktur tersebut dikonsumsi ketika transaksi berhasil disimpan.
 - **F3** menyimpan penjualan tanpa mencetak. **F4** menyimpan lalu mencetak dari kasir, tanpa membuka riwayat. Penyimpanan faktur, mutasi stok, dan penghapusan pending terjadi dalam satu transaksi database.
 - Jika cetak gagal setelah penyimpanan, faktur tetap tersimpan. F4 mengulang cetak faktur terakhir tanpa menyimpan ulang atau mengurangi stok lagi. Memulai transaksi baru lewat F5 atau menambah obat memulai keranjang berikutnya.
-- **Lihat struk** hanya membuka pratinjau; sebelum simpan, dokumen bertanda draf. Windows dengan printer yang dikonfigurasi memakai ESC/POS. Pada platform lain atau tanpa nama printer, F4 membuka struk dan dialog cetak browser.
+- **Lihat struk** membuka pratinjau native di aplikasi; sebelum simpan, dokumen bertanda draf dan tombol cetaknya dinonaktifkan. Windows dengan printer yang dikonfigurasi memakai ESC/POS. Pada platform lain atau tanpa nama printer, F4 memakai dialog printer native. Membatalkan dialog cetak tidak membatalkan faktur yang sudah tersimpan; F4 dapat dipakai kembali untuk cetak ulang.
 
 Perbarui aplikasi pada semua PC LAN agar seluruh client memakai alur pending yang sama. Tidak ada penambahan skema untuk perbaikan alur ini.
 

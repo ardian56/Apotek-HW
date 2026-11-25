@@ -5,8 +5,8 @@ use crate::{
     models::Product,
 };
 use fltk::{
-    enums::{CallbackTrigger, Event},
-    menu::{Choice, MenuFlag, MenuItem},
+    enums::{CallbackTrigger, Event, FrameType, Shortcut},
+    menu::{Choice, MenuButton, MenuFlag, MenuItem},
     prelude::*,
     table::TableContext,
     window::Window,
@@ -424,11 +424,11 @@ impl MasterObatView {
         let mut add = button(28, 552, 136, "Tambah obat", true);
         let mut edit = button(180, 552, 88, "Edit", false);
         let mut deactivate = button(284, 552, 128, "Nonaktifkan", false);
-        let mut label = button(428, 552, 128, "Barcode", false);
+        let mut label = button(180, 552, 168, "Cetak barcode", false);
         let mut refresh = button(572, 552, 96, "Refresh", false);
-        let mut prev = button(684, 552, 44, "<", false);
-        let mut next = button(740, 552, 44, ">", false);
-        let mut paging = text(796, 552, 70, 34, "1/1", 12, false);
+        let mut prev = button(984, 552, 44, "<", false);
+        let mut next = button(1128, 552, 44, ">", false);
+        let mut paging = text(1044, 552, 68, 34, "1/1", 12, false);
         let mut import = button(872, 552, 136, "Impor Excel", false);
         let mut export = button(1024, 552, 144, "Ekspor Excel", false);
         let status = text(28, 592, 1144, 18, "", 12, false);
@@ -436,6 +436,37 @@ impl MasterObatView {
             for b in [&mut add, &mut edit, &mut deactivate, &mut import] {
                 disable(b);
             }
+        }
+        let mut tools = MenuButton::new(364, 552, 128, 34, "Lainnya");
+        tools.set_frame(FrameType::RFlatBox);
+        tools.set_color(T::TABLE_HEADER);
+        tools.set_label_color(T::TEXT_BODY);
+        tools.set_label_size(13);
+        for (name, mut action, divider) in [
+            ("Edit obat", edit.clone(), false),
+            ("Nonaktifkan obat", deactivate.clone(), false),
+            ("Muat ulang daftar", refresh.clone(), true),
+            ("Impor Excel", import.clone(), false),
+            ("Ekspor Excel", export.clone(), false),
+        ] {
+            let mut flags = if action.active() {
+                MenuFlag::Normal
+            } else {
+                MenuFlag::Inactive
+            };
+            if divider {
+                flags |= MenuFlag::MenuDivider;
+            }
+            tools.add(name, Shortcut::None, flags, move |_| action.do_callback());
+        }
+        for action in [
+            &mut edit,
+            &mut deactivate,
+            &mut refresh,
+            &mut import,
+            &mut export,
+        ] {
+            action.hide();
         }
         let categories = Rc::new(RefCell::new(categories));
         let units = Rc::new(RefCell::new(units));
@@ -487,6 +518,8 @@ impl MasterObatView {
             let mut category_choice = category.clone();
             let mut unit_choice = unit.clone();
             let mut supplier_choice = supplier.clone();
+            let mut prev = prev.clone();
+            let mut next = next.clone();
             move || {
                 let selected = f();
                 if let Ok((new_categories, new_units)) = db::product_filter_options(pool.as_ref()) {
@@ -539,6 +572,16 @@ impl MasterObatView {
                         let total = (count + 99) / 100;
                         pages.set(total.max(1));
                         page.set(page.get().min(total.saturating_sub(1)));
+                        if page.get() == 0 {
+                            prev.deactivate();
+                        } else {
+                            prev.activate();
+                        }
+                        if page.get() + 1 >= pages.get() {
+                            next.deactivate();
+                        } else {
+                            next.activate();
+                        }
                         paging.set_label(&format!("{}/{}", page.get() + 1, total.max(1)));
                         let display = rows
                             .iter()
@@ -636,19 +679,14 @@ impl MasterObatView {
         });
         let selected = {
             let data = products.clone();
-            let table = grid.table.clone();
+            let grid = grid.clone();
             move || {
-                let (a, _, b, _) = table.get_selection();
-                if a < 0 {
-                    Vec::new()
-                } else {
-                    data.borrow()
-                        .iter()
-                        .skip(a as usize)
-                        .take((b - a + 1).max(1) as usize)
-                        .cloned()
-                        .collect::<Vec<_>>()
-                }
+                let selected = grid.selected_rows();
+                let data = data.borrow();
+                selected
+                    .into_iter()
+                    .filter_map(|row| data.get(row).cloned())
+                    .collect::<Vec<_>>()
             }
         };
         let p = pool.clone();
@@ -720,7 +758,8 @@ impl MasterObatView {
         let data = products.clone();
         let mut act = deactivate_action;
         let mut st = status.clone();
-        let selection_anchor = Rc::new(std::cell::Cell::new(-1));
+        let selection_anchor = grid.selection.clone();
+        let selected_grid = grid.clone();
         grid.table.handle(move |table, event| {
             if select_rows(table, event, &selection_anchor) {
                 return true;
@@ -740,8 +779,8 @@ impl MasterObatView {
             let Some(product) = data.borrow().get(row as usize).cloned() else {
                 return false;
             };
-            let (a, _, b, _) = table.get_selection();
-            if row < a || row > b {
+            if !selected_grid.selected_rows().contains(&(row as usize)) {
+                selection_anchor.borrow_mut().click(row, false, false);
                 table.set_selection(row, 0, row, table.cols() - 1);
             }
             table.redraw();
@@ -750,7 +789,7 @@ impl MasterObatView {
                 "Nonaktifkan",
                 "Refresh",
                 "Kartu stok",
-                "Barcode",
+                "Cetak barcode",
                 "Stok opname",
                 "Isi barcode kemasan",
                 "Batch dan ED",
@@ -779,7 +818,7 @@ impl MasterObatView {
                             st.set_label(&e);
                         }
                     }
-                    Some("Barcode") => {
+                    Some("Cetak barcode") => {
                         if let Err(e) = super::barcode_labels::show(choose(), p.clone()) {
                             st.set_label(&e);
                         }
