@@ -6,7 +6,7 @@ use crate::{
 };
 use fltk::{
     button::Button,
-    enums::{CallbackTrigger, FrameType, Shortcut},
+    enums::{CallbackTrigger, Event, FrameType, Key, Shortcut},
     frame::Frame,
     menu::{Choice, MenuButton, MenuFlag},
     prelude::*,
@@ -159,6 +159,8 @@ impl ReportsView {
             188,
             if kinds[0] == ReportKind::Purchases {
                 "Tambah pembelian"
+            } else if single && kinds[0] == ReportKind::Sales {
+                "Tambah penjualan [F1]"
             } else {
                 "Tambah penjualan"
             },
@@ -452,9 +454,22 @@ impl ReportsView {
             d();
         });
         let mut u = update.clone();
-        win.handle(move |_, event| {
-            if event == fltk::enums::Event::Show {
+        let sales_list = single && kinds[0] == ReportKind::Sales;
+        let mut add_sale = add.clone();
+        win.handle(move |window, event| {
+            if event == Event::Show {
                 u();
+            }
+            if sales_list
+                && window.visible_r()
+                && fltk::app::modal().is_none()
+                && add_sale.visible_r()
+                && add_sale.active_r()
+                && matches!(event, Event::KeyDown | Event::Shortcut)
+                && fltk::app::event_key() == Key::F1
+            {
+                add_sale.do_callback();
+                return true;
             }
             false
         });

@@ -1609,7 +1609,7 @@ mod tests {
         assert_eq!(legacy.shipping, 0.0);
         assert_eq!(legacy.salesperson_id, None);
 
-        sale.invoice_no = "FLOW-F4".into();
+        sale.invoice_no = "FLOW-CHECKOUT".into();
         let payload = serde_json::to_string(&sale).unwrap();
         save_pending(&pool, 1, false, &payload).unwrap();
         for _ in 0..2 {
@@ -1630,7 +1630,10 @@ mod tests {
         let result = crate::services::cart::finish_sale(
             Some(sale),
             None,
-            true,
+            |_| {
+                events.borrow_mut().push("ask");
+                true
+            },
             |sale| {
                 events.borrow_mut().push("save");
                 super::super::queries::save_sale_fefo(&pool, sale.clone())
@@ -1642,11 +1645,13 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(*events.borrow(), vec!["save", "print"]);
+        assert_eq!(*events.borrow(), vec!["save", "ask", "print"]);
         assert!(result.saved_now && result.print_error.is_some());
         assert_eq!(
-            conn.query_first::<u64, _>("SELECT COUNT(*) FROM sales WHERE invoice_no='FLOW-F4'")
-                .unwrap(),
+            conn.query_first::<u64, _>(
+                "SELECT COUNT(*) FROM sales WHERE invoice_no='FLOW-CHECKOUT'"
+            )
+            .unwrap(),
             Some(1)
         );
         assert_eq!(
@@ -1659,7 +1664,7 @@ mod tests {
         );
         assert_eq!(
             conn.query_first::<u64, _>(
-                "SELECT COUNT(*) FROM pending_sales WHERE cart_json LIKE '%FLOW-F4%'"
+                "SELECT COUNT(*) FROM pending_sales WHERE cart_json LIKE '%FLOW-CHECKOUT%'"
             )
             .unwrap(),
             Some(0)
@@ -1668,15 +1673,17 @@ mod tests {
         let retry = crate::services::cart::finish_sale(
             None,
             Some(result.sale),
-            true,
+            |_| true,
             |_| panic!("A print retry must not save another invoice"),
             |_| Ok(()),
         )
         .unwrap();
         assert!(!retry.saved_now && retry.print_error.is_none());
         assert_eq!(
-            conn.query_first::<u64, _>("SELECT COUNT(*) FROM sales WHERE invoice_no='FLOW-F4'")
-                .unwrap(),
+            conn.query_first::<u64, _>(
+                "SELECT COUNT(*) FROM sales WHERE invoice_no='FLOW-CHECKOUT'"
+            )
+            .unwrap(),
             Some(1)
         );
         assert_eq!(

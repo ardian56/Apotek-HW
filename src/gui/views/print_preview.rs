@@ -7,7 +7,7 @@ use crate::{
 };
 use fltk::{
     draw,
-    enums::{Color, Font, FrameType},
+    enums::{Color, Font, FrameType, Shortcut},
     frame::Frame,
     group::{Scroll, ScrollType},
     menu::Choice,
@@ -449,7 +449,8 @@ fn show_document(
     zoom.add_choice("75%|100%|125%|150%|200%");
     zoom.set_value(3);
     let description = text(24, 56, width - 48, 20, subtitle, 12, false);
-    let mut print = button(width - 204, height - 48, 180, "Cetak", true);
+    let mut print = button(width - 204, height - 48, 180, "Cetak [Ctrl+P]", true);
+    print.set_shortcut(Shortcut::Ctrl | 'p');
     if !enabled {
         print.deactivate();
     }

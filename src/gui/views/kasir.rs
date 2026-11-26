@@ -27,7 +27,6 @@ pub struct KasirView {
     pub discount: Input,
     pub shipping: Input,
     pub paper: Choice,
-    pub btn_preview: Button,
     pub btn_add_item: Button,
     pub grid: Grid,
     pub lbl_grand_total: Frame,
@@ -41,7 +40,6 @@ pub struct KasirView {
     pub btn_back: Button,
     pub btn_remove: Button,
     pub btn_simpan: Button,
-    pub btn_cetak: Button,
     pub btn_baru: Button,
     pub btn_pending: Button,
     pub btn_buka_pending: Button,
@@ -85,7 +83,7 @@ impl KasirView {
         win.set_color(T::BG_APP);
         page_header(
             "Penjualan baru",
-            "Scan + Enter menambah obat. F3 simpan, F4 simpan dan cetak.",
+            "F1 pilih obat · Scan + Enter tambah · F2 bayar · F3 simpan, lalu pilih cetak struk.",
         );
         let btn_back = button(984, 24, 188, "Riwayat penjualan", false);
         let date = header_input(
@@ -110,8 +108,8 @@ impl KasirView {
         let salesperson = header_choice(736, 84, 340, "Sales");
         let customer = header_choice(736, 130, 340, "Pelanggan");
         divider(184);
-        let input_barcode = input(28, 196, 156, "Kode / cari [F1]", "");
-        let product = choice(200, 196, 284, "Nama obat");
+        let input_barcode = input(28, 196, 156, "Scan / kode obat", "");
+        let product = choice(200, 196, 284, "Pilih obat [F1]");
         let qty = input(500, 196, 64, "Jumlah", "1");
         let unit = choice(580, 196, 96, "Satuan");
         let price = input(692, 196, 112, "Harga (Rp)", "0");
@@ -149,16 +147,13 @@ impl KasirView {
         text(876, 528, 96, 22, "Kembalian", 12, false);
         let lbl_kembali = text(984, 528, 188, 22, "Rp 0", 18, true);
         let btn_baru = button(28, 552, 144, "Baru [F5]", false);
-        let btn_remove = button(188, 552, 116, "Hapus item", false);
+        let btn_remove = button(188, 552, 116, "Hapus [Del]", false);
         let btn_pending = button(320, 552, 140, "Pending [F6]", false);
         let btn_buka_pending = button(476, 552, 164, "Daftar pending [F7]", false);
         let mut paper = choice(656, 528, 116, "Struk");
         paper.add_choice("58 mm|80 mm");
         paper.set_value(0);
-        let mut btn_preview = button(788, 552, 100, "Lihat struk", false);
-        btn_preview.set_tooltip("Pratinjau struk; tidak menyimpan transaksi");
-        let btn_cetak = button(904, 552, 128, "Cetak [F4]", false);
-        let btn_simpan = button(1048, 552, 124, "Simpan [F3]", true);
+        let btn_simpan = button(1020, 552, 152, "Simpan [F3]", true);
         let status = text(28, 592, 1144, 18, "", 12, false);
         win.end();
         Self {
@@ -178,7 +173,6 @@ impl KasirView {
             discount,
             shipping,
             paper,
-            btn_preview,
             btn_add_item,
             grid,
             lbl_grand_total,
@@ -192,7 +186,6 @@ impl KasirView {
             btn_back,
             btn_remove,
             btn_simpan,
-            btn_cetak,
             btn_baru,
             btn_pending,
             btn_buka_pending,

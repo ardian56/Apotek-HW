@@ -6,13 +6,14 @@ use crate::{
 pub struct CheckoutResult {
     pub sale: Sale,
     pub saved_now: bool,
+    pub print_requested: bool,
     pub print_error: Option<String>,
 }
 
 pub fn finish_sale(
     draft: Option<Sale>,
     saved: Option<Sale>,
-    print_requested: bool,
+    ask_print: impl FnOnce(&Sale) -> bool,
     persist: impl FnOnce(&Sale) -> Result<Sale, String>,
     print: impl FnOnce(&Sale) -> Result<(), String>,
 ) -> Result<CheckoutResult, String> {
@@ -22,6 +23,7 @@ pub fn finish_sale(
     } else {
         (saved.ok_or("Tambahkan obat terlebih dahulu")?, false)
     };
+    let print_requested = ask_print(&sale);
     let print_error = if print_requested {
         print(&sale).err()
     } else {
@@ -30,6 +32,7 @@ pub fn finish_sale(
     Ok(CheckoutResult {
         sale,
         saved_now,
+        print_requested,
         print_error,
     })
 }
@@ -121,12 +124,16 @@ mod tests {
     use crate::models::{ProductBatch, ProductUnit};
 
     #[test]
-    fn checkout_saves_before_print_and_retries_without_saving_again() {
+    fn checkout_saves_before_print_choice_and_retries_without_saving_again() {
         let events = std::cell::RefCell::new(Vec::new());
         let outcome = finish_sale(
             Some(crate::db::demo::sales()[0].clone()),
             None,
-            true,
+            |sale| {
+                assert_eq!(sale.items[0].product_name, "Nama dari server");
+                events.borrow_mut().push("ask");
+                true
+            },
             |sale| {
                 events.borrow_mut().push("save");
                 let mut saved = sale.clone();
@@ -140,13 +147,14 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(*events.borrow(), vec!["save", "print"]);
+        assert_eq!(*events.borrow(), vec!["save", "ask", "print"]);
         assert!(outcome.saved_now);
+        assert!(outcome.print_requested);
         assert_eq!(outcome.print_error.as_deref(), Some("Printer offline"));
         let retry = finish_sale(
             None,
             Some(outcome.sale),
-            true,
+            |_| true,
             |_| panic!("Printing again must not save another sale"),
             |_| {
                 events.borrow_mut().push("retry");
@@ -162,21 +170,44 @@ mod tests {
         assert!(finish_sale(
             Some(unpaid),
             None,
-            true,
+            |_| panic!("Unpaid cash sale must not offer printing"),
             |_| panic!("Unpaid cash sale must not be saved"),
             |_| panic!("Unpaid cash sale must not be printed")
         )
         .is_err());
-        let only_save = finish_sale(
+        let declined = finish_sale(
             Some(crate::db::demo::sales()[0].clone()),
             None,
-            false,
-            |sale| Ok(sale.clone()),
-            |_| panic!("F3 must not print"),
+            |_| {
+                events.borrow_mut().push("decline");
+                false
+            },
+            |sale| {
+                events.borrow_mut().push("save");
+                Ok(sale.clone())
+            },
+            |_| panic!("Declining printing must not print"),
         )
         .unwrap();
-        assert!(only_save.saved_now);
-        assert!(only_save.print_error.is_none());
+        assert!(declined.saved_now);
+        assert!(!declined.print_requested);
+        assert!(declined.print_error.is_none());
+        assert_eq!(
+            *events.borrow(),
+            ["save", "ask", "print", "retry", "save", "decline"]
+        );
+        assert_eq!(
+            finish_sale(
+                Some(crate::db::demo::sales()[0].clone()),
+                None,
+                |_| panic!("Failed save must not offer printing"),
+                |_| Err("Database offline".into()),
+                |_| panic!("Failed save must not print"),
+            )
+            .err()
+            .as_deref(),
+            Some("Database offline")
+        );
     }
 
     #[test]

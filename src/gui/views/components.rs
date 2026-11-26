@@ -57,12 +57,36 @@ pub fn close_modal(window: &mut fltk::window::Window) {
     fltk::app::delete_widget(window.clone());
 }
 
+pub fn focus_input(input: &mut Input) {
+    let _ = input.take_focus();
+    let _ = input.set_position(input.value().len() as i32);
+    let _ = input.set_mark(0);
+}
+
 pub fn style_choice(choice: &mut fltk::menu::Choice) {
     choice.set_frame(FrameType::BorderBox);
     choice.set_down_frame(FrameType::BorderBox);
     choice.set_color(Color::White);
     choice.set_text_color(T::TEXT_BODY);
     choice.set_text_size(14);
+    choice.handle(|choice, event| {
+        if event == Event::KeyDown {
+            let next = match fltk::app::event_key() {
+                Key::Up => choice.value() - 1,
+                Key::Down => choice.value() + 1,
+                _ => return false,
+            };
+            if next >= 0
+                && next < choice.size()
+                && choice.at(next).and_then(|item| item.label()).is_some()
+            {
+                choice.set_value(next);
+                choice.do_callback();
+            }
+            return true;
+        }
+        false
+    });
 }
 
 pub fn page_header(title: &str, description: &str) {

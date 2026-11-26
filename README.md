@@ -47,13 +47,19 @@ kasir_apotek/
 
 | Shortcut | Fungsi |
 |---|---|
-| **F1** | Fokus ke input Kode / Barcode / Cari Obat |
-| **F2** | Fokus ke input Bayar (Nominal Tunai) |
-| **F3** | Simpan Transaksi Penjualan |
-| **F4** | Cetak Struk ke Printer Thermal |
+| **F1**, daftar penjualan | Buka penjualan baru |
+| **F1**, kasir | Buka pemilih obat dari master |
+| **F2** | Fokus Bayar dan pilih seluruh nominal lama |
+| **Enter**, pada Bayar / **F3** | Simpan penjualan, lalu tanyakan apakah ingin mencetak struk |
 | **F5** | Transaksi Baru / Bersihkan Keranjang |
 | **F6** | Simpan Transaksi Sementara (Pending) |
 | **F7** | Buka Daftar Transaksi Pending |
+
+Untuk input manual, tekan **F1**, ketik nama/barcode lalu **Enter** untuk mencari. Gunakan **panah atas/bawah** memilih obat, **Enter** menuju jumlah, lalu **Enter** menambah ke keranjang. Gunakan **Tab** bila ingin mengganti satuan sebelum menambah. **Esc** menutup pemilih dan mengembalikan fokus ke barcode; scanner tetap langsung menambah obat saat mengirim barcode dan Enter.
+
+Setelah F1, panah atas/bawah juga langsung memilih obat dari kolom pencarian. Jika pencarian belum diubah, Enter langsung menuju jumlah obat yang disorot; tidak perlu mengeklik daftar terlebih dahulu.
+
+Setelah **F2**, ketik nominal lalu tekan **Enter** atau **F3**. Transaksi dan pengurangan stok disimpan sebelum pertanyaan **Ya/Tidak** cetak ditampilkan. **Enter** memilih cetak; **Esc** melewati cetak. Pilihan juga dapat dijangkau dengan **Tab** dan dipilih dengan **Space**. Kasir kembali siap menerima barcode setelah dialog selesai. Tombol/shortcut cetak **F4** dan tombol Lihat struk di kasir dihapus; pratinjau dan cetak ulang tersedia dari riwayat penjualan memakai faktur tersimpan, tanpa transaksi atau pengurangan stok baru.
 
 ---
 
