@@ -13,7 +13,7 @@ use fltk::frame::Frame;
 use fltk::prelude::*;
 use fltk::window::Window;
 use gui::theme::AppTheme;
-use gui::views::LoginView;
+use gui::views::{components::focus_input, LoginView};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
@@ -117,6 +117,7 @@ fn prompt_first_run_config() -> AppConfig {
     });
 
     win.end();
+    win.set_callback(gui::views::components::close_application_window);
     win.make_modal(true);
     win.show();
 
@@ -260,8 +261,8 @@ fn main() {
 
     let pool_clone = pool.clone();
     let mut login_win_clone = login_view.win.clone();
-    let input_user_clone = login_view.input_user.clone();
-    let input_pass_clone = login_view.input_pass.clone();
+    let mut input_user_clone = login_view.input_user.clone();
+    let mut input_pass_clone = login_view.input_pass.clone();
     let mut lbl_status_clone = login_view.lbl_status.clone();
 
     login_view.btn_login.set_callback(move |_| {
@@ -270,6 +271,11 @@ fn main() {
 
         if username.trim().is_empty() || password.trim().is_empty() {
             lbl_status_clone.set_label("Username & Password wajib diisi!");
+            if username.trim().is_empty() {
+                focus_input(&mut input_user_clone);
+            } else {
+                focus_input(&mut input_pass_clone);
+            }
             return;
         }
 
@@ -292,10 +298,12 @@ fn main() {
             }
             Ok(None) => {
                 lbl_status_clone.set_label("Username atau Password salah!");
+                focus_input(&mut input_pass_clone);
             }
             Err(e) => {
                 lbl_status_clone.set_label("Gagal koneksi ke database!");
                 eprintln!("Auth error: {}", e);
+                focus_input(&mut input_pass_clone);
             }
         }
     });

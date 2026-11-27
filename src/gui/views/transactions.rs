@@ -5,7 +5,7 @@ use crate::{
         operations::{self, Purchase, PurchaseLine},
     },
     gui::theme::AppTheme as T,
-    models::{Product, Sale, SaleItem, User},
+    models::{Product, ProductUnit, Sale, SaleItem, User},
 };
 use fltk::{
     browser::HoldBrowser,
@@ -17,6 +17,20 @@ use fltk::{
 };
 use mysql::Pool;
 use std::{cell::RefCell, rc::Rc};
+
+fn transaction_unit(product: &Product, purchase: bool) -> Option<&ProductUnit> {
+    let name = if purchase && !product.purchase_unit.trim().is_empty() {
+        &product.purchase_unit
+    } else {
+        &product.base_unit
+    };
+    let is_base_unit = name.trim().eq_ignore_ascii_case(product.base_unit.trim());
+    product.units.iter().find(|unit| {
+        unit.unit_name.trim().eq_ignore_ascii_case(name.trim())
+            && unit.conversion_qty > 0
+            && (!is_base_unit || unit.conversion_qty == 1)
+    })
+}
 
 fn medicine_browser() -> HoldBrowser {
     let mut product = HoldBrowser::new(24, 136, 712, 160, None);
@@ -60,7 +74,7 @@ fn item_dialog(
         82,
         712,
         20,
-        "Cari + Enter · Panah pilih obat · Enter ke jumlah · Tab pilih satuan",
+        "Cari + Enter · Panah pilih obat · Enter ke jumlah · Satuan otomatis dari master",
         12,
         false,
     );
@@ -75,10 +89,8 @@ fn item_dialog(
     }
     let mut product = medicine_browser();
     let qty = input(24, 312, 100, "Jumlah", "1");
-    text(144, 312, 180, 18, "Satuan", 12, false);
-    let mut unit = Choice::new(144, 336, 180, 34, None);
-    style_choice(&mut unit);
-    let price = input(
+    let unit = readonly_value(144, 312, 180, "Satuan", "");
+    let price = money_input(
         344,
         312,
         190,
@@ -105,7 +117,7 @@ fn item_dialog(
         let mut price = price.clone();
         let mut details = details.clone();
         move || {
-            u.clear();
+            u.set_label("");
             price.set_value("0");
             if let Some(details) = &mut details {
                 details.set_label("");
@@ -119,32 +131,13 @@ fn item_dialog(
                         product.earliest_expiry().unwrap_or("—")
                     ));
                 }
-                for unit in &product.units {
-                    u.add_choice(&unit.unit_name.replace('|', " "));
-                }
-                let index = if purchase {
-                    product
-                        .units
-                        .iter()
-                        .position(|u| u.unit_name.eq_ignore_ascii_case(&product.purchase_unit))
-                        .unwrap_or(0)
-                } else {
-                    product
-                        .units
-                        .iter()
-                        .position(|u| u.conversion_qty == 1)
-                        .unwrap_or(0)
-                };
-                u.set_value(index as i32);
-                if let Some(unit) = product.units.get(index) {
-                    price.set_value(&format!(
-                        "{:.2}",
-                        if purchase {
-                            product.buy_price * unit.conversion_qty as f64
-                        } else {
-                            unit.sell_price
-                        }
-                    ));
+                if let Some(unit) = transaction_unit(product, purchase) {
+                    u.set_label(&unit.unit_name);
+                    price.set_value(&number(if purchase {
+                        product.buy_price * unit.conversion_qty as f64
+                    } else {
+                        unit.sell_price
+                    }));
                 }
             }
         }
@@ -178,7 +171,7 @@ fn item_dialog(
                 st.set_label(if ps.borrow().is_empty() {
                     "Obat tidak ditemukan. Ubah pencarian."
                 } else {
-                    "Maksimum 200 obat. Enter pada jumlah/satuan menambah ke keranjang."
+                    "Maksimum 200 obat. Enter pada jumlah menambah. Satuan mengikuti master."
                 });
             }
             Err(e) => {
@@ -242,23 +235,6 @@ fn item_dialog(
     });
     let mut s = select;
     product.set_callback(move |_| s());
-    let ps = products.clone();
-    let p = product.clone();
-    let mut pr = price.clone();
-    unit.set_callback(move |u| {
-        if let Some(p) = ps.borrow().get((p.value() - 1) as usize) {
-            if let Some(unit) = p.units.get(u.value().max(0) as usize) {
-                pr.set_value(&format!(
-                    "{:.2}",
-                    if purchase {
-                        p.buy_price * unit.conversion_qty as f64
-                    } else {
-                        unit.sell_price
-                    }
-                ));
-            }
-        }
-    });
     let close = move |window: &mut Window| {
         close_modal(window);
         if let Some(mut field) = return_focus.clone() {
@@ -271,7 +247,6 @@ fn item_dialog(
     let mut w = win.clone();
     let close_save = close.clone();
     let qty_for_keys = qty.clone();
-    let unit_for_keys = unit.clone();
     let price_for_keys = price.clone();
     let discount_for_keys = discount.clone();
     let batch_for_keys = batch.clone();
@@ -290,10 +265,8 @@ fn item_dialog(
         let result = (|| -> Result<(), String> {
             let ps = products.borrow();
             let p = ps.get((product.value() - 1) as usize).ok_or("Pilih obat")?;
-            let u = p
-                .units
-                .get(unit.value().max(0) as usize)
-                .ok_or("Obat belum memiliki satuan jual")?;
+            let u = transaction_unit(p, purchase)
+                .ok_or("Satuan master belum valid. Perbaiki di Master data obat.")?;
             let line = PurchaseLine {
                 product_id: p.id,
                 code: p.code.clone(),
@@ -301,7 +274,7 @@ fn item_dialog(
                 unit: u.unit_name.clone(),
                 conversion: u.conversion_qty,
                 qty: operations::quantity(&qty.value())?,
-                price: operations::money(&price.value())?,
+                price: money_value(&price.value())?,
                 discount: operations::money(&discount.value())?,
                 batch: if purchase {
                     batch.as_ref().map(|i| i.value()).unwrap_or_default()
@@ -338,7 +311,6 @@ fn item_dialog(
                 let focus = fltk::app::focus().map(|widget| widget.as_widget_ptr());
                 let editing = [
                     qty_for_keys.as_widget_ptr(),
-                    unit_for_keys.as_widget_ptr(),
                     price_for_keys.as_widget_ptr(),
                     discount_for_keys.as_widget_ptr(),
                     submit.as_widget_ptr(),
@@ -391,6 +363,50 @@ mod tests {
                 .contains(CallbackTrigger::EnterKey | CallbackTrigger::NotChanged));
             fltk::app::delete_widget(search);
         }
+        let mut unit = readonly_value(144, 312, 180, "Satuan", "Tablet");
+        assert_eq!(unit.label(), "Tablet");
+        assert!(unit.take_focus().is_err());
+        fltk::app::delete_widget(unit);
+        let paid = money_input(876, 468, 296, "Bayar (Rp) [F2]", "110000");
+        assert_eq!(paid.value(), "110.000");
+        assert_eq!(money_value(&paid.value()).unwrap(), 110000.0);
+        fltk::app::delete_widget(paid);
+    }
+
+    #[test]
+    fn transaction_units_follow_master_defaults_and_preserve_conversion() {
+        let mut product = db::demo::products().remove(0);
+        let base = product
+            .units
+            .iter()
+            .find(|unit| unit.conversion_qty == 1)
+            .unwrap()
+            .clone();
+        let mut purchase = base.clone();
+        purchase.unit_name = "Strip".into();
+        purchase.conversion_qty = 10;
+        purchase.sell_price = base.sell_price * 10.0;
+        product.base_unit = base.unit_name.to_uppercase();
+        product.purchase_unit = purchase.unit_name.clone();
+        product.units = vec![purchase, base.clone()];
+
+        let sale = transaction_unit(&product, false).unwrap();
+        assert_eq!(sale.unit_name, base.unit_name);
+        assert_eq!(sale.conversion_qty, 1);
+        assert_eq!(sale.sell_price, base.sell_price);
+        assert_eq!(transaction_unit(&product, true).unwrap().conversion_qty, 10);
+
+        product.purchase_unit.clear();
+        assert_eq!(
+            transaction_unit(&product, true).unwrap().unit_name,
+            base.unit_name
+        );
+        product.purchase_unit = "Tidak terdaftar".into();
+        assert!(transaction_unit(&product, true).is_none());
+        product.units[1].conversion_qty = 2;
+        assert!(transaction_unit(&product, false).is_none());
+        product.purchase_unit.clear();
+        assert!(transaction_unit(&product, true).is_none());
     }
 }
 
@@ -590,10 +606,10 @@ pub fn bind_cashier(view: &mut KasirView, pool: Option<Pool>, user: User) {
             subtotal_label.set_label(&format!("Subtotal {}", rupiah(sum)));
             if mode.get() {
                 let value = operations::money(&percent.value()).unwrap_or(101.0);
-                discount.set_value(&format!("{:.2}", sum * value / 100.0));
+                discount.set_value(&number(sum * value / 100.0));
             }
-            let sum = match operations::money(&discount.value()).and_then(|d| {
-                operations::money(&shipping.value())
+            let sum = match money_value(&discount.value()).and_then(|d| {
+                money_value(&shipping.value())
                     .and_then(|s| crate::services::cart::invoice_total(sum, d, s))
             }) {
                 Ok(v) => v,
@@ -615,7 +631,7 @@ pub fn bind_cashier(view: &mut KasirView, pool: Option<Pool>, user: User) {
                 pending_button.deactivate();
             }
             change.set_label(&rupiah(
-                (operations::money(&paid.value()).unwrap_or(0.0) - sum).max(0.0),
+                (money_value(&paid.value()).unwrap_or(0.0) - sum).max(0.0),
             ));
         }
     };
@@ -638,7 +654,7 @@ pub fn bind_cashier(view: &mut KasirView, pool: Option<Pool>, user: User) {
     view.discount.set_callback(move |_| {
         mode.set(false);
         let subtotal = cart.borrow().iter().map(|i| i.subtotal).sum::<f64>();
-        let discount = operations::money(&nominal.value()).unwrap_or(0.0);
+        let discount = money_value(&nominal.value()).unwrap_or(0.0);
         percent.set_value(&format!(
             "{:.2}",
             if subtotal > 0.0 {
@@ -660,22 +676,14 @@ pub fn bind_cashier(view: &mut KasirView, pool: Option<Pool>, user: User) {
         let mut price = view.price.clone();
         let mut add = view.btn_add_item.clone();
         move || {
-            unit.clear();
+            unit.set_label("");
             price.set_value("0");
             add.deactivate();
             if let Some(p) = selected.borrow().get(product.value().max(0) as usize) {
-                add.activate();
-                for u in &p.units {
-                    unit.add_choice(&u.unit_name.replace('|', " "));
-                }
-                let index = p
-                    .units
-                    .iter()
-                    .position(|u| u.conversion_qty == 1)
-                    .unwrap_or(0);
-                unit.set_value(index as i32);
-                if let Some(u) = p.units.get(index) {
-                    price.set_value(&u.sell_price.to_string());
+                if let Some(u) = transaction_unit(p, false) {
+                    add.activate();
+                    unit.set_label(&u.unit_name);
+                    price.set_value(&number(u.sell_price));
                     price.do_callback();
                 }
             }
@@ -683,17 +691,6 @@ pub fn bind_cashier(view: &mut KasirView, pool: Option<Pool>, user: User) {
     };
     let mut on_select = select.clone();
     view.product.set_callback(move |_| on_select());
-    let ps = selected.clone();
-    let name = view.product.clone();
-    let mut price = view.price.clone();
-    view.unit.set_callback(move |u| {
-        if let Some(p) = ps.borrow().get(name.value().max(0) as usize) {
-            if let Some(v) = p.units.get(u.value().max(0) as usize) {
-                price.set_value(&v.sell_price.to_string());
-                price.do_callback();
-            }
-        }
-    });
     let line_preview = {
         let qty = view.qty.clone();
         let price = view.price.clone();
@@ -701,7 +698,7 @@ pub fn bind_cashier(view: &mut KasirView, pool: Option<Pool>, user: User) {
         let mut total = view.line_total.clone();
         move || {
             let n = operations::quantity(&qty.value()).unwrap_or(0);
-            let price = operations::money(&price.value()).unwrap_or(0.0);
+            let price = money_value(&price.value()).unwrap_or(0.0);
             let d = operations::money(&discount.value()).unwrap_or(0.0);
             total.set_label(&rupiah((n as f64 * price * (1.0 - d / 100.0)).max(0.0)));
         }
@@ -741,7 +738,6 @@ pub fn bind_cashier(view: &mut KasirView, pool: Option<Pool>, user: User) {
     let mut append_manual = append.clone();
     let ps = selected.clone();
     let name = view.product.clone();
-    let unit = view.unit.clone();
     let qty = view.qty.clone();
     let price = view.price.clone();
     let discount = view.item_discount.clone();
@@ -752,10 +748,8 @@ pub fn bind_cashier(view: &mut KasirView, pool: Option<Pool>, user: User) {
             let p = ps
                 .get(name.value().max(0) as usize)
                 .ok_or("Cari dan pilih obat terlebih dahulu")?;
-            let u = p
-                .units
-                .get(unit.value().max(0) as usize)
-                .ok_or("Pilih satuan")?;
+            let u = transaction_unit(p, false)
+                .ok_or("Satuan master belum valid. Perbaiki di Master data obat.")?;
             let line = PurchaseLine {
                 product_id: p.id,
                 code: p.code.clone(),
@@ -763,7 +757,7 @@ pub fn bind_cashier(view: &mut KasirView, pool: Option<Pool>, user: User) {
                 unit: u.unit_name.clone(),
                 conversion: u.conversion_qty,
                 qty: operations::quantity(&qty.value())?,
-                price: operations::money(&price.value())?,
+                price: money_value(&price.value())?,
                 discount: operations::money(&discount.value())?,
                 batch: "PENJUALAN".into(),
                 expiry: None,
@@ -822,11 +816,8 @@ pub fn bind_cashier(view: &mut KasirView, pool: Option<Pool>, user: User) {
             select();
             preview();
             if let Some(product) = exact {
-                let u = product
-                    .units
-                    .iter()
-                    .find(|u| u.conversion_qty == 1)
-                    .ok_or("Harga satuan dasar belum tersedia")?;
+                let u = transaction_unit(&product, false)
+                    .ok_or("Satuan master belum valid. Perbaiki di Master data obat.")?;
                 let line = PurchaseLine {
                     product_id: product.id,
                     code: product.code.clone(),
@@ -893,7 +884,7 @@ pub fn bind_cashier(view: &mut KasirView, pool: Option<Pool>, user: User) {
         move || {
             selected.borrow_mut().clear();
             names.clear();
-            units.clear();
+            units.set_label("");
             code.set_value("");
             qty.set_value("1");
             price.set_value("0");
@@ -955,9 +946,9 @@ pub fn bind_cashier(view: &mut KasirView, pool: Option<Pool>, user: User) {
                 .map(|i| i.subtotal)
                 .sum::<f64>()
                 .max(0.0);
-            let paid = operations::money(&paid.value())?;
-            let discount = operations::money(&discount.value())?;
-            let shipping = operations::money(&shipping.value())?;
+            let paid = money_value(&paid.value())?;
+            let discount = money_value(&discount.value())?;
+            let shipping = money_value(&shipping.value())?;
             let total = crate::services::cart::invoice_total(subtotal, discount, shipping)?;
             let credit = pt.value() == 1;
             let customer = if c.value() > 0 {
@@ -1006,7 +997,7 @@ pub fn bind_cashier(view: &mut KasirView, pool: Option<Pool>, user: User) {
         let mut clear = clear.clone();
         let mut status = view.status.clone();
         let paper = view.paper.clone();
-        let mut scanner = view.input_barcode.clone();
+        let mut history = view.btn_back.clone();
         let mut paid = view.input_bayar.clone();
         move || {
             let Some(pool) = &pool else {
@@ -1045,6 +1036,9 @@ pub fn bind_cashier(view: &mut KasirView, pool: Option<Pool>, user: User) {
                             "Faktur {invoice} tersimpan; cetak gagal. Cetak ulang dari riwayat penjualan."
                         ));
                         status.set_tooltip(&error);
+                        fltk::dialog::alert_default(&format!(
+                            "Faktur {invoice} tersimpan.\n{error}\nCetak ulang tersedia di riwayat penjualan."
+                        ));
                     } else if result.print_requested {
                         status.set_label(&format!(
                             "Faktur {invoice} tersimpan. Struk dikirim ke proses cetak."
@@ -1056,7 +1050,7 @@ pub fn bind_cashier(view: &mut KasirView, pool: Option<Pool>, user: User) {
                         ));
                         status.set_tooltip("");
                     }
-                    focus_input(&mut scanner);
+                    history.do_callback();
                 }
                 Err(error) => {
                     status.set_label(&format!("Transaksi belum selesai: {error}"));
@@ -1146,8 +1140,8 @@ pub fn bind_cashier(view: &mut KasirView, pool: Option<Pool>, user: User) {
                         0.0
                     }
                 ));
-                discount.set_value(&sale.discount.to_string());
-                shipping.set_value(&sale.shipping.to_string());
+                discount.set_value(&number(sale.discount));
+                shipping.set_value(&number(sale.shipping));
                 if let Some(day) = sale.sale_date.get(..10) {
                     date.set_value(day);
                 }
@@ -1159,7 +1153,7 @@ pub fn bind_cashier(view: &mut KasirView, pool: Option<Pool>, user: User) {
                         .unwrap_or(0),
                 );
                 *data.borrow_mut() = sale.items;
-                paid.set_value(&sale.paid_amount.to_string());
+                paid.set_value(&number(sale.paid_amount));
                 pt.set_value(if sale.payment_type == "KREDIT" { 1 } else { 0 });
                 pt.do_callback();
                 c.set_value(
@@ -1191,7 +1185,6 @@ pub fn bind_cashier(view: &mut KasirView, pool: Option<Pool>, user: User) {
     let mut paid = view.input_bayar.clone();
     let row_fields = [
         view.qty.as_widget_ptr(),
-        view.unit.as_widget_ptr(),
         view.price.as_widget_ptr(),
         view.item_discount.as_widget_ptr(),
     ];
@@ -1218,6 +1211,16 @@ pub fn bind_cashier(view: &mut KasirView, pool: Option<Pool>, user: User) {
             && matches!(event, Event::KeyDown | Event::Shortcut)
         {
             let key = fltk::app::event_key();
+            if key == Key::Escape {
+                if let Some(mut main) = window.top_window() {
+                    if main.fullscreen_active() {
+                        main.fullscreen(false);
+                        return true;
+                    }
+                }
+                back.do_callback();
+                return true;
+            }
             if key == Key::F1 {
                 open_picker(&barcode.value());
                 return true;
@@ -1268,7 +1271,7 @@ pub fn bind_cashier(view: &mut KasirView, pool: Option<Pool>, user: User) {
     });
     if pool.is_none() {
         *items.borrow_mut() = db::demo::sales()[0].items.clone();
-        view.input_bayar.set_value("50000");
+        view.input_bayar.set_value("50.000");
         view.customer.set_value(1);
         let mut r = refresh;
         r();
@@ -1344,7 +1347,7 @@ pub fn bind_purchase(view: &mut PembelianView, pool: Option<Pool>, user: User) {
                 .sum::<f64>()
                 .max(0.0);
             sub.set_label(&rupiah(sum));
-            let result = (sum - operations::money(&disc.value()).unwrap_or(0.0))
+            let result = (sum - money_value(&disc.value()).unwrap_or(0.0))
                 * (1.0 + operations::money(&tax.value()).unwrap_or(0.0) / 100.0);
             total.set_label(&rupiah(result));
             if connected && !data.borrow().is_empty() {
@@ -1413,7 +1416,7 @@ pub fn bind_purchase(view: &mut PembelianView, pool: Option<Pool>, user: User) {
                 } else {
                     None
                 },
-                discount: operations::money(&disc.value())?,
+                discount: money_value(&disc.value())?,
                 tax_percent: operations::money(&tax.value())?,
                 lines: data.borrow().clone(),
             })
@@ -1518,7 +1521,7 @@ pub fn bind_purchase(view: &mut PembelianView, pool: Option<Pool>, user: User) {
         let mut due = due.clone();
         if let Err(e) = choose_pending(p, user.id, true, None, move |_id, payload| {
             let purchase: Purchase = serde_json::from_str(&payload).map_err(|e| e.to_string())?;
-            disc.set_value(&purchase.discount.to_string());
+            disc.set_value(&number(purchase.discount));
             tax.set_value(&purchase.tax_percent.to_string());
             supplier.set_value(
                 supplier_ids

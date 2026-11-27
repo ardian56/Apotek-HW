@@ -89,7 +89,7 @@ impl PembelianView {
         panel(864, 88, 308, 436);
         text(884, 108, 264, 20, "Subtotal barang", 13, false);
         let lbl_subtotal = text(884, 136, 264, 32, "Rp 0", 22, true);
-        let input_discount = input(884, 194, 264, "Potongan faktur (Rp)", "0");
+        let input_discount = money_input(884, 194, 264, "Potongan faktur (Rp)", "0");
         let input_tax = input(884, 268, 264, "Pajak (%)", "0");
         text(884, 342, 264, 20, "Total pembelian", 13, false);
         let mut lbl_grand_total = text(884, 372, 264, 44, "Rp 0", 30, true);

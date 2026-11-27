@@ -456,9 +456,18 @@ impl ReportsView {
         let mut u = update.clone();
         let sales_list = single && kinds[0] == ReportKind::Sales;
         let mut add_sale = add.clone();
+        let list_focus = grid.table.clone();
         win.handle(move |window, event| {
             if event == Event::Show {
                 u();
+                if sales_list {
+                    let mut table = list_focus.clone();
+                    fltk::app::add_timeout3(0.0, move |_| {
+                        if table.visible_r() && fltk::app::modal().is_none() {
+                            let _ = table.take_focus();
+                        }
+                    });
+                }
             }
             if sales_list
                 && window.visible_r()
@@ -659,11 +668,11 @@ impl ReportsView {
                     row[1],
                     rupiah(row[6].parse().unwrap_or(0.0))
                 ),
-                &row[6],
+                &number(row[6].parse().unwrap_or(0.0)),
             ) else {
                 return;
             };
-            match operations::money(&value).and_then(|amount| {
+            match money_value(&value).and_then(|amount| {
                 operations::pay(
                     p,
                     ks[k.value() as usize] == ReportKind::Receivables,

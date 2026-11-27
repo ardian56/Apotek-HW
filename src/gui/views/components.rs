@@ -2,7 +2,7 @@ use crate::gui::theme::AppTheme as T;
 use fltk::{
     button::Button,
     draw,
-    enums::{Align, Color, Event, Font, FrameType, Key, Shortcut},
+    enums::{Align, CallbackReason, Color, Event, Font, FrameType, Key, Shortcut},
     frame::Frame,
     input::Input,
     prelude::*,
@@ -46,6 +46,140 @@ pub fn input(x: i32, y: i32, w: i32, label: &str, value: &str) -> Input {
     i
 }
 
+fn normalized_amount(text: &str) -> Result<String, String> {
+    let text = text.trim();
+    let text = if text
+        .get(..2)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("rp"))
+    {
+        text[2..].trim_start()
+    } else {
+        text
+    };
+    let mut parts = text.split(',');
+    let whole = parts.next().unwrap_or_default();
+    let fraction = parts.next();
+    if parts.next().is_some()
+        || !whole.bytes().all(|c| c.is_ascii_digit() || c == b'.')
+        || fraction.is_some_and(|f| f.len() > 2 || !f.bytes().all(|c| c.is_ascii_digit()))
+    {
+        return Err(
+            "Nominal tidak valid. Gunakan titik untuk ribuan dan koma untuk pecahan.".into(),
+        );
+    }
+    let whole = whole.replace('.', "");
+    if whole.is_empty() && fraction.is_none() {
+        return Err("Nominal harus berupa angka".into());
+    }
+    let mut value = if whole.is_empty() { "0".into() } else { whole };
+    if let Some(fraction) = fraction {
+        value.push('.');
+        value.push_str(fraction);
+    }
+    Ok(value)
+}
+
+pub fn money_value(text: &str) -> Result<f64, String> {
+    crate::db::operations::money(&normalized_amount(text)?)
+}
+
+fn edited_amount(text: &str, position: i32, mark: i32) -> Option<(String, i32, i32)> {
+    if text.is_empty() {
+        return Some((String::new(), 0, 0));
+    }
+    let value = normalized_amount(text).ok()?;
+    crate::db::operations::money(&value).ok()?;
+    let (whole, fraction) = value
+        .split_once('.')
+        .map_or((value.as_str(), None), |(w, f)| (w, Some(f)));
+    let mut formatted = number(whole.parse().ok()?);
+    if let Some(fraction) = fraction {
+        formatted.push(',');
+        formatted.push_str(fraction);
+    }
+    let cursor = |position: i32| {
+        let after = text
+            .bytes()
+            .skip(position.max(0) as usize)
+            .filter(|c| c.is_ascii_digit() || *c == b',')
+            .count();
+        let mut before = formatted
+            .bytes()
+            .filter(|c| *c != b'.')
+            .count()
+            .saturating_sub(after);
+        if before == 0 {
+            return 0;
+        }
+        for (index, c) in formatted.bytes().enumerate() {
+            if c != b'.' {
+                before -= 1;
+                if before == 0 {
+                    return index as i32 + 1;
+                }
+            }
+        }
+        formatted.len() as i32
+    };
+    let position = cursor(position);
+    let mark = cursor(mark);
+    Some((formatted, position, mark))
+}
+
+pub fn money_input(x: i32, y: i32, w: i32, label: &str, value: &str) -> Input {
+    let value = edited_amount(value, value.len() as i32, 0)
+        .map(|(text, _, _)| text)
+        .unwrap_or_else(|| value.into());
+    let mut field = input(x, y, w, label, &value);
+    field.handle(|field, event| {
+        if event == Event::KeyDown && field.position() == field.mark() {
+            let position = field.position();
+            let text = field.value();
+            let next = match fltk::app::event_key() {
+                Key::BackSpace
+                    if position > 0
+                        && text.as_bytes().get(position as usize - 1) == Some(&b'.') =>
+                {
+                    Some(position - 1)
+                }
+                Key::Delete if text.as_bytes().get(position.max(0) as usize) == Some(&b'.') => {
+                    Some(position + 1)
+                }
+                _ => None,
+            };
+            if let Some(next) = next {
+                let _ = field.set_position(next);
+                let _ = field.set_mark(next);
+            }
+        }
+        if matches!(
+            event,
+            Event::KeyUp | Event::Focus | Event::Unfocus | Event::Released
+        ) {
+            let text = field.value();
+            if let Some((formatted, position, mark)) =
+                edited_amount(&text, field.position(), field.mark())
+            {
+                if formatted != text {
+                    field.set_value(&formatted);
+                    let _ = field.set_position(position);
+                    let _ = field.set_mark(mark);
+                }
+            }
+        }
+        false
+    });
+    field
+}
+
+pub fn readonly_value(x: i32, y: i32, w: i32, label: &str, value: &str) -> Frame {
+    text(x, y, w, 18, label, 12, false);
+    let mut field = text(x, y + 24, w, 34, value, 14, false);
+    field.set_frame(FrameType::BorderBox);
+    field.set_color(Color::White);
+    field
+}
+
 pub fn disable(button: &mut Button) {
     button.deactivate();
     button.set_color(T::TABLE_HEADER);
@@ -57,7 +191,14 @@ pub fn close_modal(window: &mut fltk::window::Window) {
     fltk::app::delete_widget(window.clone());
 }
 
-pub fn focus_input(input: &mut Input) {
+pub fn close_application_window(window: &mut fltk::window::Window) {
+    // FLTK treats Esc as a cancelled window close; only an explicit close hides the app.
+    if fltk::app::callback_reason() != CallbackReason::Cancelled {
+        window.hide();
+    }
+}
+
+pub fn focus_input(input: &mut impl InputExt) {
     let _ = input.take_focus();
     let _ = input.set_position(input.value().len() as i32);
     let _ = input.set_mark(0);
@@ -657,6 +798,62 @@ mod tests {
         assert_eq!(rupiah(2700.50), "Rp 2.700,50");
         assert_eq!(rupiah(-1250.75), "Rp -1.250,75");
         assert_eq!(rupiah(-0.0), "Rp 0");
+    }
+
+    #[test]
+    fn accounting_input_preserves_amounts_cents_and_validation() {
+        for (text, expected) in [
+            ("110000", 110000.0),
+            ("110.000", 110000.0),
+            ("Rp 1.200,50", 1200.5),
+            ("0,25", 0.25),
+            (",5", 0.5),
+        ] {
+            assert_eq!(money_value(text).unwrap(), expected);
+        }
+        assert_eq!(
+            money_value("110.000").unwrap() - money_value("19.200").unwrap(),
+            90800.0
+        );
+        assert_eq!(money_value("10.125").unwrap(), 10125.0);
+        assert_eq!(crate::db::operations::money("10.125").unwrap(), 10.13);
+        for text in [
+            "",
+            "Rp",
+            "-100",
+            "NaN",
+            "1e5",
+            "1,200.50",
+            "1,000",
+            "1,2,3",
+            "1.000.000.000.000",
+        ] {
+            assert!(money_value(text).is_err(), "{text}");
+        }
+    }
+
+    #[test]
+    fn accounting_edits_preserve_cursor_selection_and_partial_decimals() {
+        for (text, position, mark, expected, cursor, anchor) in [
+            ("110000", 6, 6, "110.000", 7, 7),
+            ("110000", 6, 0, "110.000", 7, 0),
+            ("110.00", 4, 4, "11.000", 4, 4),
+            ("11.000", 2, 2, "11.000", 2, 2),
+            ("110.5000", 5, 5, "1.105.000", 5, 5),
+            ("0001100", 3, 3, "1.100", 0, 0),
+            ("1,", 2, 2, "1,", 2, 2),
+            ("1,0", 3, 3, "1,0", 3, 3),
+            ("1200,50", 7, 7, "1.200,50", 8, 8),
+            ("", 0, 0, "", 0, 0),
+        ] {
+            assert_eq!(
+                edited_amount(text, position, mark),
+                Some((expected.into(), cursor, anchor)),
+                "{text}"
+            );
+        }
+        assert!(edited_amount("-100", 4, 4).is_none());
+        assert!(edited_amount("1,234", 5, 5).is_none());
     }
 }
 

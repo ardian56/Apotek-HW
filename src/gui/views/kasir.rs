@@ -15,7 +15,7 @@ pub struct KasirView {
     pub input_barcode: Input,
     pub product: Choice,
     pub qty: Input,
-    pub unit: Choice,
+    pub unit: Frame,
     pub price: Input,
     pub item_discount: Input,
     pub line_total: Frame,
@@ -111,8 +111,8 @@ impl KasirView {
         let input_barcode = input(28, 196, 156, "Scan / kode obat", "");
         let product = choice(200, 196, 284, "Pilih obat [F1]");
         let qty = input(500, 196, 64, "Jumlah", "1");
-        let unit = choice(580, 196, 96, "Satuan");
-        let price = input(692, 196, 112, "Harga (Rp)", "0");
+        let unit = readonly_value(580, 196, 96, "Satuan", "");
+        let price = money_input(692, 196, 112, "Harga (Rp)", "0");
         let item_discount = input(820, 196, 72, "Disc (%)", "0");
         let line_total = text(908, 220, 132, 34, "Rp 0", 14, true);
         let btn_add_item = button(1056, 220, 116, "Tambah", true);
@@ -136,14 +136,14 @@ impl KasirView {
         }
         divider(458);
         let discount_percent = input(28, 468, 100, "Diskon (%)", "0");
-        let discount = input(144, 468, 144, "Diskon (Rp)", "0");
-        let shipping = input(304, 468, 148, "Ongkos (Rp)", "0");
+        let discount = money_input(144, 468, 144, "Diskon (Rp)", "0");
+        let shipping = money_input(304, 468, 148, "Ongkos (Rp)", "0");
         text(492, 468, 352, 18, "Total bayar", 13, false);
         let mut lbl_grand_total = text(492, 486, 352, 40, "Rp 0", 32, true);
         lbl_grand_total.set_label_color(T::PRIMARY);
         let mut lbl_subtotal = text(492, 528, 148, 18, "Subtotal Rp 0", 11, false);
         lbl_subtotal.set_label_color(T::TEXT_MUTED);
-        let input_bayar = input(876, 468, 296, "Bayar [F2]", "0");
+        let input_bayar = money_input(876, 468, 296, "Bayar (Rp) [F2]", "0");
         text(876, 528, 96, 22, "Kembalian", 12, false);
         let lbl_kembali = text(984, 528, 188, 22, "Rp 0", 18, true);
         let btn_baru = button(28, 552, 144, "Baru [F5]", false);

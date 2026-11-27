@@ -6,6 +6,8 @@ Adaptasi modul demo video, pratinjau tampilan, dan batas pengujian tersedia di [
 
 Hasil pemeriksaan fungsi transaksi, stok, pending/cetak, dan batas produk tersedia pada [audit POS](docs/pos-audit.md). Nama pada sidebar dan login mengikuti **Pengaturan → Nama apotek**.
 
+Perbandingan referensi POS, kekurangan operasional, dan kriteria penggunaan tanpa mouse tersedia pada [audit perbandingan POS](docs/pos-gap-review.md).
+
 ---
 
 ## 1. Arsitektur & Teknologi
@@ -54,12 +56,17 @@ kasir_apotek/
 | **F5** | Transaksi Baru / Bersihkan Keranjang |
 | **F6** | Simpan Transaksi Sementara (Pending) |
 | **F7** | Buka Daftar Transaksi Pending |
+| **Esc**, kasir | Kembali ke riwayat penjualan; keranjang yang belum disimpan tetap tersedia selama sesi |
 
-Untuk input manual, tekan **F1**, ketik nama/barcode lalu **Enter** untuk mencari. Gunakan **panah atas/bawah** memilih obat, **Enter** menuju jumlah, lalu **Enter** menambah ke keranjang. Gunakan **Tab** bila ingin mengganti satuan sebelum menambah. **Esc** menutup pemilih dan mengembalikan fokus ke barcode; scanner tetap langsung menambah obat saat mengirim barcode dan Enter.
+Login langsung memfokuskan dan memilih username. Ketik username, tekan **Tab** atau **Enter** ke password, lalu **Enter** atau Enter numpad untuk masuk. Jika login gagal, password dipilih agar dapat langsung diganti. **Esc** tidak menutup aplikasi. Pada popup, Esc membatalkan/menutup popup; pada fullscreen, Esc memulihkan ukuran jendela terlebih dahulu. Aplikasi dapat ditutup melalui kontrol jendela atau Alt+F4.
+
+Untuk input manual, tekan **F1**, ketik nama/barcode lalu **Enter** untuk mencari. Gunakan **panah atas/bawah** memilih obat, **Enter** menuju jumlah, lalu **Enter** menambah ke keranjang. Satuan terkunci mengikuti master: penjualan memakai satuan dasar, pembelian memakai satuan beli. **Tab** langsung berpindah ke harga/diskon. **Esc** menutup pemilih dan mengembalikan fokus ke barcode; scanner tetap langsung menambah obat saat mengirim barcode dan Enter.
 
 Setelah F1, panah atas/bawah juga langsung memilih obat dari kolom pencarian. Jika pencarian belum diubah, Enter langsung menuju jumlah obat yang disorot; tidak perlu mengeklik daftar terlebih dahulu.
 
-Setelah **F2**, ketik nominal lalu tekan **Enter** atau **F3**. Transaksi dan pengurangan stok disimpan sebelum pertanyaan **Ya/Tidak** cetak ditampilkan. **Enter** memilih cetak; **Esc** melewati cetak. Pilihan juga dapat dijangkau dengan **Tab** dan dipilih dengan **Space**. Kasir kembali siap menerima barcode setelah dialog selesai. Tombol/shortcut cetak **F4** dan tombol Lihat struk di kasir dihapus; pratinjau dan cetak ulang tersedia dari riwayat penjualan memakai faktur tersimpan, tanpa transaksi atau pengurangan stok baru.
+Kolom nominal rupiah memakai pemisah ribuan otomatis: ketik `110000` untuk menampilkan `110.000`. Gunakan koma untuk pecahan, misalnya `1.200,50`. Bayar, harga, diskon rupiah, dan ongkos memakai format ini; posisi kursor dan pilihan teks tetap mengikuti pengeditan keyboard.
+
+Setelah **F2**, ketik nominal lalu tekan **Enter** atau **F3**. Transaksi dan pengurangan stok disimpan sebelum pertanyaan **Ya/Tidak** cetak ditampilkan. **Enter** memilih cetak; **Esc** melewati cetak. Pilihan juga dapat dijangkau dengan **Tab** dan dipilih dengan **Space**. Setelah cetak selesai atau memilih Tidak, aplikasi otomatis kembali ke riwayat penjualan dengan fokus di tabel. **F1** membuka penjualan berikutnya. Jika cetak tidak selesai, pesan memberitahukan bahwa faktur tetap tersimpan sebelum kembali ke riwayat. Jika penyimpanan gagal, keranjang tetap terbuka untuk diperbaiki. Pratinjau dan cetak ulang tersedia dari riwayat penjualan memakai faktur tersimpan, tanpa transaksi atau pengurangan stok baru.
 
 ---
 

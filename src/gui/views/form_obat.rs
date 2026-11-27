@@ -60,15 +60,17 @@ impl FormObatModal {
         choice_suplier.set_value(0);
         let mut input_satuan_dasar = input(444, 162, 104, "Satuan dasar", "Tablet");
         let mut input_min_stok = input(564, 162, 100, "Stok minimum", "10");
-        let mut input_harga_beli = input(16, 236, 180, "Harga beli dasar (Rp)", "0");
+        let mut input_harga_beli = money_input(16, 236, 180, "Harga beli dasar (Rp)", "0");
         let mut input_satuan_beli = input(444, 236, 220, "Satuan beli (kosong: dasar)", "");
-        let mut input_harga_jual_1 = input(212, 236, 216, "Harga jual dasar (Rp)", "0");
+        let mut input_harga_jual_1 = money_input(212, 236, 216, "Harga jual dasar (Rp)", "0");
         let mut input_nama_satuan_2 = input(16, 310, 200, "Satuan kedua", "");
         let mut input_konversi_2 = input(232, 310, 120, "Isi satuan dasar", "1");
-        let mut input_harga_jual_2 = input(368, 310, 296, "Harga jual satuan kedua (Rp)", "0");
+        let mut input_harga_jual_2 =
+            money_input(368, 310, 296, "Harga jual satuan kedua (Rp)", "0");
         let mut input_nama_satuan_3 = input(16, 384, 200, "Satuan ketiga", "");
         let mut input_konversi_3 = input(232, 384, 120, "Isi satuan dasar", "1");
-        let mut input_harga_jual_3 = input(368, 384, 296, "Harga jual satuan ketiga (Rp)", "0");
+        let mut input_harga_jual_3 =
+            money_input(368, 384, 296, "Harga jual satuan ketiga (Rp)", "0");
         let mut input_no_batch = input(16, 458, 180, "Nomor batch awal", "");
         let mut input_expired = input(212, 458, 216, "Kedaluwarsa (YYYY-MM-DD)", "");
         let mut input_stok_awal = input(444, 458, 220, "Stok awal (satuan dasar)", "0");
@@ -82,19 +84,19 @@ impl FormObatModal {
             input_satuan_dasar.set_value(&p.base_unit);
             input_satuan_beli.set_value(&p.purchase_unit);
             input_min_stok.set_value(&p.min_stock.to_string());
-            input_harga_beli.set_value(&p.buy_price.to_string());
+            input_harga_beli.set_value(&number(p.buy_price));
             if let Some(u) = p.units.iter().find(|u| u.conversion_qty == 1) {
-                input_harga_jual_1.set_value(&u.sell_price.to_string());
+                input_harga_jual_1.set_value(&number(u.sell_price));
             }
             if let Some(u) = p.units.get(1) {
                 input_nama_satuan_2.set_value(&u.unit_name);
                 input_konversi_2.set_value(&u.conversion_qty.to_string());
-                input_harga_jual_2.set_value(&u.sell_price.to_string());
+                input_harga_jual_2.set_value(&number(u.sell_price));
             }
             if let Some(u) = p.units.get(2) {
                 input_nama_satuan_3.set_value(&u.unit_name);
                 input_konversi_3.set_value(&u.conversion_qty.to_string());
-                input_harga_jual_3.set_value(&u.sell_price.to_string());
+                input_harga_jual_3.set_value(&number(u.sell_price));
             }
             if let Some(b) = p.batches.first() {
                 input_no_batch.set_value(&b.batch_no);

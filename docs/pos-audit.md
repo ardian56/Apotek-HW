@@ -77,7 +77,7 @@ Build offline dan 18 uji unit lulus, termasuk tombol fullscreen, pemisahan short
 
 ## Alur penjualan dengan keyboard — 26 November 2026
 
-**F1** pada daftar Penjualan membuka kasir. **F1** di kasir membuka pemilih obat dari master. Ketik nama atau barcode lalu tekan **Enter** untuk mencari; gunakan panah untuk memilih obat, **Enter** untuk mengisi jumlah, **Tab** untuk berpindah ke satuan, lalu **Enter** untuk menambah ke keranjang. Dialog mengambil harga, satuan, stok, dan ED dari master; penjualan tidak meminta input batch atau ED baru. **Esc** menutup pemilih dan mengembalikan fokus ke kolom scanner. Scan barcode yang cocok tetap langsung menambah satu satuan dasar; scan berulang menggabungkan jumlah dan tetap memeriksa stok layak jual.
+**F1** pada daftar Penjualan membuka kasir. **F1** di kasir membuka pemilih obat dari master. Ketik nama atau barcode lalu tekan **Enter** untuk mencari; gunakan panah untuk memilih obat, **Enter** untuk mengisi jumlah, **Tab** untuk berpindah ke harga/diskon, lalu **Enter** untuk menambah ke keranjang. Satuan otomatis mengikuti master. Dialog mengambil harga, satuan, stok, dan ED dari master; penjualan tidak meminta input batch atau ED baru. **Esc** menutup pemilih dan mengembalikan fokus ke kolom scanner. Scan barcode yang cocok tetap langsung menambah satu satuan dasar; scan berulang menggabungkan jumlah dan tetap memeriksa stok layak jual.
 
 **F2** memfokuskan pembayaran dan memilih nilai yang ada sehingga kasir dapat langsung mengetik nominal pengganti. **Enter** pada pembayaran atau **F3** menyimpan transaksi, kemudian menanyakan apakah struk perlu dicetak. Pilihan tidak mencetak tetap mempertahankan faktur dan mutasi stok yang sudah tersimpan. Validasi atau penyimpanan yang gagal tidak boleh membuka pilihan cetak. Tombol Lihat struk dan Cetak terpisah serta shortcut F4 pada kasir dihapus. Pratinjau dan cetak ulang tersedia dari riwayat penjualan tanpa menyimpan transaksi atau mengurangi stok lagi.
 
@@ -89,9 +89,37 @@ Log pengguna kemudian menunjukkan bahwa F1 memicu panic saat membuat pemilih oba
 
 Uji regresi membuat browser native dengan konfigurasi produksi tanpa menampilkan jendela atau menambahkan baris yang memerlukan metrik font. Uji tersebut dan seluruh suite berjalan tanpa variabel `DISPLAY`: 19 uji lulus, satu uji database diabaikan. Build offline juga lulus. Pemeriksaan ini memverifikasi penerimaan konfigurasi oleh FLTK; interaksi popup lengkap tetap belum diuji lewat GUI.
 
-Laporan pengguna berikutnya menunjukkan bahwa popup terbuka dengan fokus di pencarian, sehingga panah tidak memilih baris. Enter pada pencarian kosong juga terserap oleh FLTK karena trigger sebelumnya hanya memanggil callback bila teks berubah. Pencarian kini memakai `EnterKeyAlways`; panah dari pencarian berpindah ke daftar dan memilih baris. Teks yang baru diketik dicari terlebih dahulu. Enter tanpa perubahan pencarian menuju jumlah obat yang disorot. Enter pada daftar tetap menuju jumlah, dan Enter pada jumlah/satuan menambah ke keranjang.
+Laporan pengguna berikutnya menunjukkan bahwa popup terbuka dengan fokus di pencarian, sehingga panah tidak memilih baris. Enter pada pencarian kosong juga terserap oleh FLTK karena trigger sebelumnya hanya memanggil callback bila teks berubah. Pencarian kini memakai `EnterKeyAlways`; panah dari pencarian berpindah ke daftar dan memilih baris. Teks yang baru diketik dicari terlebih dahulu. Enter tanpa perubahan pencarian menuju jumlah obat yang disorot. Enter pada daftar tetap menuju jumlah, dan Enter pada jumlah/harga/diskon menambah ke keranjang.
 
 Uji konfigurasi native diperluas untuk pencarian kosong maupun terisi dengan status teks belum berubah, dan seluruh widget native diuji pada satu thread sesuai aturan FLTK. Build serta 19 uji headless lulus; satu uji database diabaikan. Skrip GUI ditambah untuk panah langsung setelah F1, Enter dari daftar, dan Enter pada pencarian kosong. Sintaks skrip lulus; interaksi GUI belum dijalankan karena penolakan Xvfb sebelumnya.
+
+## Satuan transaksi terkunci — 27 November 2026
+
+Satuan pada baris kasir dan popup pemilihan obat ditampilkan sebagai teks terkunci. Penjualan mengambil satuan dasar dari master; pembelian mengambil satuan beli, dengan fallback ke satuan dasar untuk data lama yang belum mengisi satuan beli. Tab melewati satuan langsung ke harga/diskon. Pemilihan manual dan scanner memakai pemetaan satuan master yang sama; konversi dan harga mengikuti data tersebut. Satuan/konversi master yang tidak valid ditolak dengan pesan untuk memperbaiki Master data obat.
+
+Build offline dan 20 uji headless lulus; satu uji database diabaikan. Uji memeriksa pemetaan satuan dasar/satuan beli walaupun urutan daftar berubah, konversi pembelian, penolakan master tidak valid, dan field satuan yang tidak menerima fokus. Skrip GUI diperbarui untuk memastikan Tab/panah tidak mengubah satuan; interaksi GUI lengkap belum dijalankan karena penolakan Xvfb sebelumnya.
+
+## Format nominal rupiah — 27 November 2026
+
+Kolom Bayar, harga obat di kasir/pemilih/master, diskon faktur dalam rupiah, dan ongkos memakai pemisah ribuan otomatis. `110000` tampil sebagai `110.000`; pecahan memakai koma, misalnya `1.200,50`. Tanda titik merupakan pemisah ribuan pada kolom ini. Nilai program dari master dan pending diformat sebelum ditampilkan. Pembayaran hutang/piutang juga menerima format rupiah yang sama.
+
+Formatter mempertahankan posisi kursor, pilihan F2/Ctrl+A, dan pecahan yang sedang diketik. Backspace/Delete di dekat pemisah ribuan menghapus digit yang dituju. Perhitungan membaca nilai numerik dari format lokal, sedangkan validasi angka internal, Excel, dan database tetap memakai angka desimal biasa. Angka negatif, bukan angka, pecahan lebih dari dua digit, serta nominal di luar batas ditolak.
+
+Build offline dan 22 uji headless lulus; satu uji database diabaikan. Uji mencakup nominal/cents, nilai kembalian, perbedaan parser tampilan dan angka internal, pemetaan kursor, pilihan teks, penghapusan digit, pecahan sementara, dan konfigurasi field native. Skrip GUI ditambah untuk input nominal mentah/berpemisah, F2 mengganti nominal, dan Backspace dekat titik. Interaksi GUI lengkap belum dijalankan karena penolakan Xvfb sebelumnya.
+
+## Escape dan fokus login — 27 November 2026
+
+Esc di kasir kembali ke daftar Penjualan setelah proses simpan/cetak selesai. Keranjang yang belum disimpan dipertahankan pada halaman kasir selama sesi, tanpa dianggap sebagai pending yang tersimpan di database. Saat daftar Penjualan tampil, tabel mendapat fokus agar panah dapat langsung memilih faktur. Esc pada popup menutup popup tersebut; saat fullscreen aktif, Esc mengembalikan ukuran jendela terlebih dahulu.
+
+Jendela utama, login, dan pengaturan awal mengabaikan alasan penutupan `Cancelled` yang dipakai FLTK untuk Escape. Penutupan melalui kontrol jendela tetap berjalan. Login langsung memfokuskan dan memilih username, termasuk setelah keluar akun. Tab atau Enter pada username menuju password; Enter biasa maupun Enter numpad pada password menjalankan login. Kesalahan atau kolom kosong mengembalikan fokus ke kolom yang perlu diisi.
+
+Build dan 22 uji headless lulus; satu uji database diabaikan. Skrip GUI diperluas untuk Esc kembali ke riwayat, Esc berikutnya menjaga aplikasi terbuka, membuka ulang keranjang tanpa kehilangan item, dan Esc setelah keluar fullscreen. Interaksi login serta regresi GUI lengkap belum dijalankan karena penolakan Xvfb sebelumnya.
+
+## Kembali otomatis setelah checkout — 27 November 2026
+
+Setelah faktur berhasil disimpan dan proses pilihan/cetak selesai, aplikasi otomatis kembali ke daftar Penjualan. Memilih Tidak juga kembali ke daftar. Tabel riwayat dimuat ulang dan mendapat fokus, sehingga F1 membuka penjualan berikutnya. Penyimpanan yang gagal mempertahankan keranjang dan fokus pembayaran. Cetak yang tidak selesai menampilkan pesan bahwa faktur tetap tersimpan, lalu kembali ke riwayat setelah pesan ditutup; pencetakan ulang memakai faktur yang sama.
+
+Build dan 22 uji headless lulus; satu uji database diabaikan. Uji checkout yang ada memverifikasi urutan simpan/pilihan cetak, penolakan pembayaran belum cukup, cetak gagal, dan cetak ulang tanpa penyimpanan ganda. Perpindahan halaman setelah checkout belum diuji melalui GUI karena penolakan Xvfb sebelumnya.
 
 ## Memperbarui instalasi
 

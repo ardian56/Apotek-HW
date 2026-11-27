@@ -27,7 +27,7 @@ x11.XGetGeometry.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.POINTER(cty
 
 
 def key(name):
-    name = {"-": "minus"}.get(name, name)
+    name = {"-": "minus", ".": "period", ",": "comma"}.get(name, name)
     code = x11.XKeysymToKeycode(display, x11.XStringToKeysym(name.encode()))
     assert code, name
     xtest.XTestFakeKeyEvent(display, code, 1, 0)
@@ -119,7 +119,10 @@ with tempfile.TemporaryDirectory(prefix="apotek-pos-test-") as directory:
         time.sleep(0.8)
         navigate("Pembelian");page_click(1080,41);key("F1");time.sleep(0.25)
         assert "Tambah barang pembelian" in windows();screenshot("purchase-form");key("Escape");time.sleep(0.2)
-        navigate("Penjualan");key("F1");time.sleep(0.2)
+        navigate("Penjualan")
+        hx,hy=page_position(28,20);sales_heading_region=f"{900 * PAGE_WIDTH // 1200}x32+{hx}+{hy}"
+        sales_heading=pixels(screenshot("sales-list-before-cashier"),sales_heading_region)
+        key("F1");time.sleep(0.2)
         key("F5");key("Return");key("F1");time.sleep(0.2)
         assert "Tambah barang pembelian" not in windows(),"Hidden purchase intercepted F1"
         assert "Tambah obat penjualan" in windows(),"Cashier F1 did not open master medicines"
@@ -145,7 +148,11 @@ with tempfile.TemporaryDirectory(prefix="apotek-pos-test-") as directory:
         scan("0000000000000000");unknown=screenshot("unknown-scan");assert pixels(unknown,cart_region(40,780,height=160))==pixels(second,cart_region(40,780,height=160))
         key("F1");time.sleep(0.2);scan("paracetamol")
         assert "Tambah obat penjualan" in windows(),"Manual medicine picker disappeared"
-        key("Down");key("Up");key("Return");key("3");key("Tab");key("Return");time.sleep(0.2)
+        key("Down");key("Up");key("Return");key("3")
+        before_unit=window_pixels(screenshot("picker-master-unit"),picker,144,336,180,34)
+        key("Tab");key("Down")
+        assert window_pixels(screenshot("picker-unit-locked"),picker,144,336,180,34)==before_unit,"Keyboard changed the locked master unit"
+        key("Return");time.sleep(0.2)
         assert "Tambah obat penjualan" not in windows(),"Keyboard medicine selection did not add to cart"
         manual=screenshot("keyboard-added")
         assert pixels(manual,cart_region(580,28))!=pixels(second,cart_region(580,28)),"Keyboard quantity did not apply"
@@ -161,10 +168,29 @@ with tempfile.TemporaryDirectory(prefix="apotek-pos-test-") as directory:
         px,py=page_position(886,498)
         payment_region=f"{180 * PAGE_WIDTH // 1200}x22+{px}+{py}"
         assert pixels(payment,payment_region)==pixels(first_payment,payment_region),"F2 did not replace the payment value"
+        key("F2")
+        for char in "110000":key(char)
+        grouped_payment=screenshot("accounting-payment")
+        key("F2")
+        for char in "110.000":key(char)
+        assert pixels(screenshot("accounting-payment-with-separator"),payment_region)==pixels(grouped_payment,payment_region),"Accounting separator changed the payment"
+        key("Home")
+        for _ in range(4):key("Right")
+        key("BackSpace");key("End");deleted_payment=screenshot("accounting-payment-delete")
+        key("F2")
+        for char in "11000":key(char)
+        assert pixels(screenshot("accounting-payment-after-delete"),payment_region)==pixels(deleted_payment,payment_region),"Backspace beside the thousands separator did not remove a digit"
         before_save=set(windows());key("Return");key("F3");key("F4");time.sleep(0.2)
         assert set(windows())==before_save,"Demo checkout or removed F4 opened a print dialog"
         assert pixels(screenshot("demo-checkout-disabled"),cart_region(40,780,height=160))==pixels(payment,cart_region(40,780,height=160)),"Demo checkout changed the cart"
         assert not uri_file.exists(),"Cashier unexpectedly opened the browser"
+        key("Escape");time.sleep(0.2)
+        assert app.poll() is None,"Cashier Escape closed the application"
+        assert pixels(screenshot("cashier-escape-history"),sales_heading_region)==sales_heading,"Cashier Escape did not return to sales history"
+        key("Escape");time.sleep(0.2)
+        assert app.poll() is None,"Escape on history closed the application"
+        key("F1");time.sleep(0.2)
+        assert pixels(screenshot("cashier-draft-after-escape"),cart_region(40,780,height=160))==pixels(payment,cart_region(40,780,height=160)),"Escape discarded the unsaved cart"
         navigate("Obat");master=screenshot("master");assert len(set(pixels(master,master_ed_region())))>1,"ED missing"
         row_click(0)
         shift=x11.XKeysymToKeycode(display,x11.XStringToKeysym(b"Shift_L"));xtest.XTestFakeKeyEvent(display,shift,1,0);x11.XFlush(display)

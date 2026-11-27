@@ -203,11 +203,7 @@ fn product_form(pool: Pool, existing: Option<Product>, mut updated: impl FnMut()
                 .parse::<i32>()
                 .map_err(|_| "Stok awal harus bilangan bulat")?;
             let base = f.input_satuan_dasar.value().trim().to_string();
-            let mut units = vec![(
-                base.clone(),
-                1,
-                operations::money(&f.input_harga_jual_1.value())?,
-            )];
+            let mut units = vec![(base.clone(), 1, money_value(&f.input_harga_jual_1.value())?)];
             for (name, conversion, price) in [
                 (
                     &f.input_nama_satuan_2,
@@ -224,7 +220,7 @@ fn product_form(pool: Pool, existing: Option<Product>, mut updated: impl FnMut()
                     units.push((
                         name.value().trim().into(),
                         operations::quantity(&conversion.value())?,
-                        operations::money(&price.value())?,
+                        money_value(&price.value())?,
                     ));
                 }
             }
@@ -249,7 +245,7 @@ fn product_form(pool: Pool, existing: Option<Product>, mut updated: impl FnMut()
                     f.input_satuan_beli.value().trim().into()
                 },
                 min_stock: min,
-                buy_price: operations::money(&f.input_harga_beli.value())?,
+                buy_price: money_value(&f.input_harga_beli.value())?,
                 units,
                 batch_no: f.input_no_batch.value().trim().into(),
                 expired_date: if !f.input_expired.value().trim().is_empty() {

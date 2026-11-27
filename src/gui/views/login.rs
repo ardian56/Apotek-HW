@@ -48,10 +48,15 @@ impl LoginView {
         lbl_status.set_label_color(T::DANGER_TEXT);
         let btn_login = button(48, 320, 324, "Masuk", true);
         win.end();
+        win.set_callback(close_application_window);
         let mut login = btn_login.clone();
         let mut status = lbl_status.clone();
+        let username = input_user.clone();
+        let mut password = input_pass.clone();
         win.handle(move |window, event| {
             if event == Event::Show {
+                password.set_value("");
+                status.set_label("");
                 match crate::db::operations::pharmacy_name(Some(&pool)) {
                     Ok(name) => {
                         title.set_label(&name);
@@ -60,10 +65,31 @@ impl LoginView {
                     }
                     Err(error) => status.set_label(&format!("Nama apotek gagal dimuat: {error}")),
                 }
+                let mut username = username.clone();
+                fltk::app::add_timeout3(0.0, move |_| {
+                    if username.visible_r() && fltk::app::modal().is_none() {
+                        focus_input(&mut username);
+                    }
+                });
             }
-            if event == Event::KeyDown && fltk::app::event_key() == Key::Enter {
-                login.do_callback();
-                return true;
+            if window.visible_r()
+                && fltk::app::modal().is_none()
+                && matches!(event, Event::KeyDown | Event::Shortcut)
+            {
+                match fltk::app::event_key() {
+                    Key::Escape => return true,
+                    Key::Enter | Key::KPEnter => {
+                        if fltk::app::focus().is_some_and(|widget| {
+                            widget.as_widget_ptr() == username.as_widget_ptr()
+                        }) {
+                            focus_input(&mut password);
+                        } else {
+                            login.do_callback();
+                        }
+                        return true;
+                    }
+                    _ => (),
+                }
             }
             false
         });

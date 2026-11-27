@@ -495,6 +495,7 @@ impl AppShell {
         win.resizable(&content_area);
         win.size_range(1024.min(width), 640.min(height), 0, 0);
         win.end();
+        win.set_callback(close_application_window);
         let sidebar = Rc::new(RefCell::new(Sidebar {
             headers,
             rows,

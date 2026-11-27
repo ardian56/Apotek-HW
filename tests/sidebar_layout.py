@@ -88,6 +88,9 @@ try:
     assert geometry()[2:]==(x11.XDisplayWidth(ui.display,screen),x11.XDisplayHeight(ui.display,screen)),'F11 did not enter fullscreen'
     fullscreen_key('Escape')
     assert geometry()[2:]==original[2:],'Escape did not restore the original size'
+    fullscreen_key('Escape')
+    assert app.poll() is None,'Escape closed the application'
+    assert geometry()[2:]==original[2:],'Escape hid or resized the main window'
     ui.click(90, ui.SHELL_HEIGHT - 59 + 20)
     time.sleep(0.2)
     x11 = ui.x11
